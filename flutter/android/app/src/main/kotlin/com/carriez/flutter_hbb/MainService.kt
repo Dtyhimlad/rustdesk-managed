@@ -181,7 +181,10 @@ class MainService : Service() {
             }
             "stop_capture" -> {
                 Log.d(logTag, "from rust:stop_capture")
-                stopCapture()
+                // A finished remote session must fully end its MediaProjection
+                // session. Reusing the detached VirtualDisplay on Android 14+
+                // can leave the next connection stuck on "waiting for image".
+                stopCapture(releaseProjection = true)
             }
             "half_scale" -> {
                 val halfScale = arg1.toBoolean()
@@ -509,40 +512,70 @@ class MainService : Service() {
     }
 
     @Synchronized
-    fun stopCapture() {
-        Log.d(logTag, "Stop Capture")
+    fun stopCapture(releaseProjection: Boolean = false) {
+        Log.d(logTag, "Stop Capture, releaseProjection:$releaseProjection")
         FFI.setFrameRawEnable("video",false)
         _isStart = false
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
-        // release video
-        if (reuseVirtualDisplay) {
-            // The virtual display video projection can be paused by calling `setSurface(null)`.
-            // https://developer.android.com/reference/android/hardware/display/VirtualDisplay.Callback
-            // https://learn.microsoft.com/en-us/dotnet/api/android.hardware.display.virtualdisplay.callback.onpaused?view=net-android-34.0
+
+        // For temporary capture restarts (for example, orientation changes) we
+        // retain the projection and, on Android 14+, its VirtualDisplay.
+        // When a remote session actually ends we deliberately tear the entire
+        // projection down so the next connection receives a fresh Android
+        // MediaProjection session instead of reusing a potentially stale one.
+        if (releaseProjection) {
+            try {
+                virtualDisplay?.release()
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to release VirtualDisplay", e)
+            }
+            virtualDisplay = null
+        } else if (reuseVirtualDisplay) {
             virtualDisplay?.setSurface(null)
         } else {
             virtualDisplay?.release()
+            virtualDisplay = null
         }
-        // suface needs to be release after `imageReader.close()` to imageReader access released surface
+
+        // Surface must be released after ImageReader.close().
         // https://github.com/rustdesk/rustdesk/issues/4118#issuecomment-1515666629
         imageReader?.close()
         imageReader = null
         videoEncoder?.let {
-            it.signalEndOfInputStream()
-            it.stop()
-            it.release()
-        }
-        if (!reuseVirtualDisplay) {
-            virtualDisplay = null
+            try {
+                it.signalEndOfInputStream()
+                it.stop()
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to stop video encoder cleanly", e)
+            } finally {
+                try {
+                    it.release()
+                } catch (e: Exception) {
+                    Log.w(logTag, "Failed to release video encoder", e)
+                }
+            }
         }
         videoEncoder = null
-        // suface needs to be release after `imageReader.close()` to imageReader access released surface
-        // https://github.com/rustdesk/rustdesk/issues/4118#issuecomment-1515666629
         surface?.release()
+        surface = null
 
         // release audio
         _isAudioStart = false
         audioRecordHandle.tryReleaseAudio()
+
+        if (releaseProjection) {
+            val projection = mediaProjection
+            mediaProjection = null
+            pendingCaptureRequest = false
+            projectionRequestInFlight = false
+            _isReady = false
+            try {
+                projection?.stop()
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to stop MediaProjection cleanly", e)
+            }
+            checkMediaPermission()
+        }
     }
 
     fun destroy() {
@@ -552,15 +585,7 @@ class MainService : Service() {
         pendingCaptureRequest = false
         projectionRequestInFlight = false
 
-        stopCapture()
-
-        if (reuseVirtualDisplay) {
-            virtualDisplay?.release()
-            virtualDisplay = null
-        }
-
-        mediaProjection = null
-        checkMediaPermission()
+        stopCapture(releaseProjection = true)
         stopForeground(true)
         stopService(Intent(this, FloatingWindowService::class.java))
         stopSelf()
