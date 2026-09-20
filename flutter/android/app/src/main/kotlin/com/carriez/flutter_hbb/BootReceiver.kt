@@ -6,7 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 
-const val DEBUG_BOOT_COMPLETED = "com.carriez.flutter_hbb.DEBUG_BOOT_COMPLETED"
+const val DEBUG_BOOT_COMPLETED = "com.inforchannel.rustdesk.DEBUG_BOOT_COMPLETED"
 
 class BootReceiver : BroadcastReceiver() {
     private val logTag = "tagBootReceiver"

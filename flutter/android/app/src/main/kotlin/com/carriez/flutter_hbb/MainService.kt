@@ -51,8 +51,8 @@ const val DEFAULT_NOTIFY_TEXT = "Service is running"
 const val DEFAULT_NOTIFY_ID = 1
 const val NOTIFY_ID_OFFSET = 100
 
-const val ACT_START_LISTENER_SERVICE = "com.carriez.flutter_hbb.START_LISTENER_SERVICE"
-const val ACT_MEDIA_PROJECTION_DENIED = "com.carriez.flutter_hbb.MEDIA_PROJECTION_DENIED"
+const val ACT_START_LISTENER_SERVICE = "com.inforchannel.rustdesk.START_LISTENER_SERVICE"
+const val ACT_MEDIA_PROJECTION_DENIED = "com.inforchannel.rustdesk.MEDIA_PROJECTION_DENIED"
 
 const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_VP9
 

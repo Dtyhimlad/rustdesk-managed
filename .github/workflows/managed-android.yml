@@ -33,6 +33,10 @@ jobs:
       MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
       MANAGED_ENROLLMENT_URL: ${{ secrets.MANAGED_ENROLLMENT_URL }}
       MANAGED_ENROLLMENT_TOKEN: ${{ secrets.MANAGED_ENROLLMENT_TOKEN }}
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - name: Check required build secrets
         shell: bash
@@ -47,6 +51,22 @@ jobs:
           fi
           if [ -z "$MANAGED_ENROLLMENT_TOKEN" ]; then
             echo "::error::Repository secret MANAGED_ENROLLMENT_TOKEN is required for Android Address Book enrollment."
+            exit 1
+          fi
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Repository secret ANDROID_KEYSTORE_BASE64 is required for permanent Android release signing."
+            exit 1
+          fi
+          if [ -z "$ANDROID_KEY_ALIAS" ]; then
+            echo "::error::Repository secret ANDROID_KEY_ALIAS is required for permanent Android release signing."
+            exit 1
+          fi
+          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "::error::Repository secret ANDROID_KEYSTORE_PASSWORD is required for permanent Android release signing."
+            exit 1
+          fi
+          if [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Repository secret ANDROID_KEY_PASSWORD is required for permanent Android release signing."
             exit 1
           fi
 
@@ -291,14 +311,35 @@ jobs:
           MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
           MANAGED_ENROLLMENT_URL: ${{ secrets.MANAGED_ENROLLMENT_URL }}
           MANAGED_ENROLLMENT_TOKEN: ${{ secrets.MANAGED_ENROLLMENT_TOKEN }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         shell: bash
         run: |
           export PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
 
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" \
             ./flutter/android/gradle.properties
-          sed -i "s/signingConfigs.release/signingConfigs.debug/g" \
-            ./flutter/android/app/build.gradle
+          KEYSTORE_PATH="./flutter/android/app/managed-release.jks"
+          KEY_PROPERTIES="./flutter/android/key.properties"
+          cleanup_signing_files() {
+            rm -f "$KEYSTORE_PATH" "$KEY_PROPERTIES"
+          }
+          trap cleanup_signing_files EXIT
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Decoded Android keystore is empty."
+            exit 1
+          fi
+
+          cat > "$KEY_PROPERTIES" <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=managed-release.jks
+          EOF
 
           pushd flutter
           flutter pub get
@@ -312,12 +353,12 @@ jobs:
           popd
 
           cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-             ./rustdesk-managed-1.4.9-arm64-v8a.apk
+             ./inforchannel-rustdesk-1.4.9-arm64-v8a.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rustdesk-managed-android-arm64
-          path: rustdesk-managed-1.4.9-arm64-v8a.apk
+          path: inforchannel-rustdesk-1.4.9-arm64-v8a.apk
           if-no-files-found: error
           retention-days: 14

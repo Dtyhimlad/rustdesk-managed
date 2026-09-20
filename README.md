@@ -42,7 +42,7 @@ Android builds are produced in GitHub Actions on an x86-64 Ubuntu runner rather 
 Local development is done on macOS with Android Studio and ADB. GitHub Actions produces the APK, which can then be installed on a test device with:
 
 ```bash
-adb install -r rustdesk-managed-arm64.apk
+adb install -r inforchannel-rustdesk-1.4.9-arm64-v8a.apk
 ```
 
 The initial CI target is **ARM64 / arm64-v8a**. Other Android ABIs can be added after the managed ARM64 build is stable.
@@ -59,10 +59,24 @@ The initial CI target is **ARM64 / arm64-v8a**. Other Android ABIs can be added 
 - [x] Disable the floating stop-service window
 - [x] Preconfigure the self-hosted RustDesk server and key
 - [x] Configure the permanent unattended password
-- [ ] Automatically register RustDesk ID/device metadata with the management platform
-- [ ] Make registration idempotent so reinstalling an existing RustDesk ID does not create duplicates
+- [x] Automatically register RustDesk ID/device metadata with the management platform
+- [x] Make registration idempotent so reinstalling an existing RustDesk ID does not create duplicates
+- [x] Final managed Android application ID (`com.inforchannel.rustdesk`)
+- [ ] Permanent release signing validated in GitHub Actions
 - [ ] Add update/distribution workflow for the self-hosted installer page
 - [ ] Expand builds to additional Android ABIs if required
+
+## Android application identity
+
+The managed Android client uses the final application ID:
+
+```text
+com.inforchannel.rustdesk
+```
+
+The Kotlin/Java source package remains the upstream RustDesk package where possible. The Android `applicationId` is deliberately separate so the managed client can coexist with the official RustDesk application without destabilizing upstream JNI and plugin bindings.
+
+Release APKs are signed with a persistent private keystore supplied to GitHub Actions through repository secrets. The keystore itself is never committed to the repository.
 
 ## ADB / MediaProjection testing
 
@@ -71,7 +85,7 @@ A normal development/test device does **not** need to be rooted.
 On Android/OEM versions where the app-op is supported, MediaProjection behaviour can be tested with:
 
 ```bash
-adb shell appops set <package.id> PROJECT_MEDIA allow
+adb shell appops set com.inforchannel.rustdesk PROJECT_MEDIA allow
 ```
 
 This is treated as an optional provisioning mechanism, not as something the application can assume will behave identically on every Android release or vendor ROM.
