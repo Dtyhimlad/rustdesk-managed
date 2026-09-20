@@ -46,6 +46,7 @@ class MainActivity : FlutterActivity() {
     private val channelTag = "mChannel"
     private val logTag = "mMainActivity"
     private var mainService: MainService? = null
+    private var isServiceBound = false
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
@@ -53,9 +54,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         if (MainService.isReady) {
-            Intent(activity, MainService::class.java).also {
-                bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-            }
+            bindListenerService()
         }
         flutterMethodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -102,14 +101,35 @@ class MainActivity : FlutterActivity() {
             _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             FFI.setClipboardManager(_rdClipboardManager!!)
         }
+        ensureListenerService()
     }
 
     override fun onDestroy() {
         Log.e(logTag, "onDestroy")
-        mainService?.let {
+        if (isServiceBound) {
             unbindService(serviceConnection)
+            isServiceBound = false
         }
+        mainService = null
         super.onDestroy()
+    }
+
+    private fun bindListenerService() {
+        if (isServiceBound) return
+        val intent = Intent(this, MainService::class.java)
+        isServiceBound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun ensureListenerService() {
+        val intent = Intent(this, MainService::class.java).apply {
+            action = ACT_START_LISTENER_SERVICE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        bindListenerService()
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -130,14 +150,10 @@ class MainActivity : FlutterActivity() {
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
                 "init_service" -> {
-                    Intent(activity, MainService::class.java).also {
-                        bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-                    }
-                    if (MainService.isReady) {
-                        result.success(false)
-                        return@setMethodCallHandler
-                    }
-                    requestMediaProjection()
+                    // Managed mode: the RustDesk listener is independent from
+                    // MediaProjection. Starting the service must not prompt for
+                    // screen sharing.
+                    ensureListenerService()
                     result.success(true)
                 }
                 "start_capture" -> {
