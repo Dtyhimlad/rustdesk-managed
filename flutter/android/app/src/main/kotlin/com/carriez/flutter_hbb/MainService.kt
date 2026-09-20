@@ -51,6 +51,9 @@ const val DEFAULT_NOTIFY_TEXT = "Service is running"
 const val DEFAULT_NOTIFY_ID = 1
 const val NOTIFY_ID_OFFSET = 100
 
+const val ACT_START_LISTENER_SERVICE = "com.carriez.flutter_hbb.START_LISTENER_SERVICE"
+const val ACT_MEDIA_PROJECTION_DENIED = "com.carriez.flutter_hbb.MEDIA_PROJECTION_DENIED"
+
 const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_VP9
 
 // video const
@@ -128,7 +131,12 @@ class MainService : Service() {
                     }
                     if (authorized) {
                         if (!isFileTransfer && !isStart) {
-                            startCapture()
+                            if (mediaProjection == null) {
+                                pendingCaptureRequest = true
+                                requestMediaProjectionForCapture()
+                            } else {
+                                startCapture()
+                            }
                         }
                         onClientAuthorizedNotification(id, type, username, peerId)
                     } else {
@@ -219,6 +227,8 @@ class MainService : Service() {
     private var videoEncoder: MediaCodec? = null
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
+    private var pendingCaptureRequest = false
+    private var projectionRequestInFlight = false
 
     // audio
     private val audioRecordHandle = AudioRecordHandle(this, { isStart }, { isAudioStart })
@@ -326,27 +336,62 @@ class MainService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("whichService", "this service: ${Thread.currentThread()}")
         super.onStartCommand(intent, flags, startId)
-        if (intent?.action == ACT_INIT_MEDIA_PROJECTION_AND_SERVICE) {
-            createForegroundNotification()
 
-            if (intent.getBooleanExtra(EXT_INIT_FROM_BOOT, false)) {
+        when (intent?.action) {
+            ACT_START_LISTENER_SERVICE -> {
+                createForegroundNotification()
                 FFI.startService()
+                Log.d(logTag, "listener service started")
             }
-            Log.d(logTag, "service starting: ${startId}:${Thread.currentThread()}")
-            val mediaProjectionManager =
-                getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-            intent.getParcelableExtra<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)?.let {
-                mediaProjection =
-                    mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, it)
+            ACT_INIT_MEDIA_PROJECTION_AND_SERVICE -> {
+                createForegroundNotification()
+
+                // Keep compatibility with older boot intents, although managed
+                // mode no longer initializes MediaProjection during boot.
+                if (intent.getBooleanExtra(EXT_INIT_FROM_BOOT, false)) {
+                    FFI.startService()
+                }
+
+                val mediaProjectionManager =
+                    getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
+                intent.getParcelableExtra<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)?.let {
+                    mediaProjection =
+                        mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, it)
+                    projectionRequestInFlight = false
+                    _isReady = true
+                    checkMediaPermission()
+
+                    if (pendingCaptureRequest) {
+                        pendingCaptureRequest = false
+                        startCapture()
+                    }
+                } ?: run {
+                    Log.d(logTag, "MediaProjection result missing; requesting capture permission")
+                    requestMediaProjectionForCapture()
+                }
+            }
+
+            ACT_MEDIA_PROJECTION_DENIED -> {
+                projectionRequestInFlight = false
+                pendingCaptureRequest = false
+                _isReady = false
                 checkMediaPermission()
-                _isReady = true
-            } ?: let {
-                Log.d(logTag, "getParcelableExtra intent null, invoke requestMediaProjection")
-                requestMediaProjection()
+                Log.d(logTag, "MediaProjection request denied or cancelled")
+            }
+
+            null -> {
+                // START_STICKY recreation after Android kills the process.
+                createForegroundNotification()
+                FFI.startService()
+                Log.d(logTag, "listener service recreated")
             }
         }
-        return START_NOT_STICKY // don't use sticky (auto restart), the new service (from auto restart) will lose control
+
+        // The always-on listener does not depend on a MediaProjection token,
+        // so it is safe and desirable for Android to recreate this service.
+        return START_STICKY
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -354,12 +399,38 @@ class MainService : Service() {
         updateScreenInfo(newConfig.orientation)
     }
 
+    private fun requestMediaProjectionForCapture() {
+        if (mediaProjection != null) {
+            if (pendingCaptureRequest) {
+                pendingCaptureRequest = false
+                startCapture()
+            }
+            return
+        }
+
+        if (projectionRequestInFlight) {
+            return
+        }
+
+        projectionRequestInFlight = true
+        Handler(Looper.getMainLooper()).post {
+            requestMediaProjection()
+        }
+    }
+
     private fun requestMediaProjection() {
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        startActivity(intent)
+
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            projectionRequestInFlight = false
+            pendingCaptureRequest = false
+            Log.e(logTag, "Failed to launch MediaProjection permission flow", e)
+        }
     }
 
     @SuppressLint("WrongConstant")
@@ -478,6 +549,8 @@ class MainService : Service() {
         Log.d(logTag, "destroy service")
         _isReady = false
         _isAudioStart = false
+        pendingCaptureRequest = false
+        projectionRequestInFlight = false
 
         stopCapture()
 
