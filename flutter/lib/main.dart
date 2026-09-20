@@ -135,6 +135,13 @@ Future<void> initEnv(String appType) async {
 
 Future<void> configureManagedAndroidBehavior() async {
   if (!isAndroid) return;
+
+  await bind.mainSetOption(
+      key: 'custom-rendezvous-server', value: 'rust.tserver.org');
+  await bind.mainSetOption(key: 'relay-server', value: 'rust.tserver.org');
+  await bind.mainSetOption(
+      key: 'api-server', value: 'https://rust.tserver.org');
+
   await bind.mainSetLocalOption(key: 'show-scam-warning', value: 'N');
   await bind.mainSetLocalOption(
       key: kOptionDisableFloatingWindow, value: 'Y');
