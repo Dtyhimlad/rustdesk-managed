@@ -26,7 +26,22 @@ env:
   VERSION: "1.4.9"
 
 jobs:
+  validate-managed-config:
+    name: Validate managed configuration
+    runs-on: ubuntu-24.04
+    env:
+      MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
+    steps:
+      - name: Check required build secrets
+        shell: bash
+        run: |
+          if [ -z "$MANAGED_RUSTDESK_PASSWORD" ]; then
+            echo "::error::Repository secret MANAGED_RUSTDESK_PASSWORD is required for the managed Android build."
+            exit 1
+          fi
+
   generate-android-bridge:
+    needs: validate-managed-config
     name: Generate Android Flutter/Rust bridge
     runs-on: ubuntu-22.04
 
@@ -263,6 +278,7 @@ jobs:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
         shell: bash
         run: |
           export PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
@@ -277,7 +293,8 @@ jobs:
           flutter build apk \
             --release \
             --target-platform android-arm64 \
-            --split-per-abi
+            --split-per-abi \
+            --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD"
           popd
 
           cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
