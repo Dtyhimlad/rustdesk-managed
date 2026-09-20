@@ -31,11 +31,24 @@ class PermissionRequestTransparentActivity: Activity() {
             if (resultCode == RESULT_OK && data != null) {
                 launchService(data)
             } else {
+                notifyProjectionDenied()
                 setResult(RES_FAILED)
             }
         }
 
         finish()
+    }
+
+    private fun notifyProjectionDenied() {
+        val serviceIntent = Intent(this, MainService::class.java).apply {
+            action = ACT_MEDIA_PROJECTION_DENIED
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
     }
 
     private fun launchService(mediaProjectionResultIntent: Intent) {
