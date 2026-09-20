@@ -51,14 +51,14 @@ The initial CI target is **ARM64 / arm64-v8a**. Other Android ABIs can be added 
 
 - [x] Fork created
 - [x] Stable RustDesk 1.4.9 development branch created
-- [ ] Reproducible stock ARM64 Android build in GitHub Actions
-- [ ] Start RustDesk listener automatically when the app starts
-- [ ] Start listener automatically after device boot
-- [ ] Decouple listener startup from MediaProjection permission
-- [ ] Request/start screen capture only for an actual remote-control session
-- [ ] Disable the floating stop-service window
-- [ ] Preconfigure the self-hosted RustDesk server and key
-- [ ] Configure the permanent unattended password
+- [x] Reproducible stock ARM64 Android build in GitHub Actions
+- [x] Start RustDesk listener automatically when the app starts
+- [x] Start listener automatically after device boot
+- [x] Decouple listener startup from MediaProjection permission
+- [x] Request/start screen capture only for an actual remote-control session
+- [x] Disable the floating stop-service window
+- [x] Preconfigure the self-hosted RustDesk server and key
+- [x] Configure the permanent unattended password
 - [ ] Automatically register RustDesk ID/device metadata with the management platform
 - [ ] Make registration idempotent so reinstalling an existing RustDesk ID does not create duplicates
 - [ ] Add update/distribution workflow for the self-hosted installer page
