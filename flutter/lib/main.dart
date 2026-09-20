@@ -133,6 +133,9 @@ Future<void> initEnv(String appType) async {
   updateSystemWindowTheme();
 }
 
+const _managedPermanentPassword =
+    String.fromEnvironment('MANAGED_RUSTDESK_PASSWORD');
+
 Future<void> configureManagedAndroidBehavior() async {
   if (!isAndroid) return;
 
@@ -141,6 +144,17 @@ Future<void> configureManagedAndroidBehavior() async {
   await bind.mainSetOption(key: 'relay-server', value: 'rust.tserver.org');
   await bind.mainSetOption(
       key: 'api-server', value: 'https://rust.tserver.org');
+  await bind.mainSetOption(
+      key: 'key',
+      value: 'SrygKya3weSkBoTNyuevuX2XenoZaoV47eaq1hxhnqY=');
+
+  if (_managedPermanentPassword.isNotEmpty) {
+    await bind.mainSetPermanentPasswordWithResult(
+        password: _managedPermanentPassword);
+    await bind.mainSetOption(
+        key: kOptionVerificationMethod, value: 'use-permanent-password');
+    await bind.mainSetOption(key: kOptionApproveMode, value: 'password');
+  }
 
   await bind.mainSetLocalOption(key: 'show-scam-warning', value: 'N');
   await bind.mainSetLocalOption(
