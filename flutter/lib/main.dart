@@ -21,6 +21,8 @@ import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 
 import 'common.dart';
@@ -135,6 +137,94 @@ Future<void> initEnv(String appType) async {
 
 const _managedPermanentPassword =
     String.fromEnvironment('MANAGED_RUSTDESK_PASSWORD');
+const _managedEnrollmentUrl =
+    String.fromEnvironment('MANAGED_ENROLLMENT_URL');
+const _managedEnrollmentToken =
+    String.fromEnvironment('MANAGED_ENROLLMENT_TOKEN');
+
+Future<void> registerManagedAndroid() async {
+  if (!isAndroid ||
+      _managedEnrollmentUrl.isEmpty ||
+      _managedEnrollmentToken.isEmpty ||
+      _managedPermanentPassword.isEmpty) {
+    return;
+  }
+
+  String rustdeskId = '';
+  for (var attempt = 0; attempt < 30; attempt++) {
+    try {
+      final candidate = (await bind.mainGetMyId()).trim();
+      if (RegExp(r'^\d{6,20}$').hasMatch(candidate)) {
+        rustdeskId = candidate;
+        break;
+      }
+    } catch (_) {}
+    await Future.delayed(const Duration(seconds: 2));
+  }
+
+  if (rustdeskId.isEmpty) {
+    debugPrint('Managed enrollment skipped: RustDesk ID not available');
+    return;
+  }
+
+  var hostname = 'Android device';
+  var operatingSystem = 'Android';
+  try {
+    final info = await DeviceInfoPlugin().androidInfo;
+    final manufacturer = info.manufacturer.trim();
+    final model = info.model.trim();
+    hostname = [manufacturer, model]
+        .where((value) => value.isNotEmpty)
+        .join(' ')
+        .trim();
+    if (hostname.isEmpty) hostname = 'Android device';
+    operatingSystem =
+        'Android ${info.version.release} (SDK ${info.version.sdkInt})';
+  } catch (_) {}
+
+  final body = jsonEncode({
+    'enrollment_token': _managedEnrollmentToken,
+    'rustdesk_id': rustdeskId,
+    'rustdesk_password': _managedPermanentPassword,
+    'name': 'New Machine',
+    'hostname': hostname,
+    'operating_system': operatingSystem,
+    'rustdesk_address': rustdeskId,
+  });
+
+  for (var attempt = 1; attempt <= 6; attempt++) {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(_managedEnrollmentUrl),
+            headers: const {'Content-Type': 'application/json; charset=utf-8'},
+            body: body,
+          )
+          .timeout(const Duration(seconds: 30));
+
+      final decoded = jsonDecode(response.body);
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          decoded is Map<String, dynamic> &&
+          decoded['ok'] == true) {
+        debugPrint(
+            'Managed enrollment succeeded for RustDesk ID $rustdeskId');
+        return;
+      }
+
+      debugPrint(
+          'Managed enrollment attempt $attempt failed with HTTP ${response.statusCode}');
+    } catch (e) {
+      debugPrint('Managed enrollment attempt $attempt failed: $e');
+    }
+
+    if (attempt < 6) {
+      await Future.delayed(const Duration(seconds: 5));
+    }
+  }
+
+  debugPrint('Managed enrollment failed after all retries');
+}
 
 Future<void> configureManagedAndroidBehavior() async {
   if (!isAndroid) return;
@@ -223,6 +313,9 @@ void runMobileApp() async {
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
+  if (isAndroid) {
+    unawaited(registerManagedAndroid());
+  }
   await initUniLinks();
 }
 
