@@ -149,11 +149,15 @@ Future<void> configureManagedAndroidBehavior() async {
       value: 'SrygKya3weSkBoTNyuevuX2XenoZaoV47eaq1hxhnqY=');
 
   if (_managedPermanentPassword.isNotEmpty) {
-    await bind.mainSetPermanentPasswordWithResult(
+    final passwordSet = await bind.mainSetPermanentPasswordWithResult(
         password: _managedPermanentPassword);
-    await bind.mainSetOption(
-        key: kOptionVerificationMethod, value: 'use-permanent-password');
-    await bind.mainSetOption(key: kOptionApproveMode, value: 'password');
+    if (passwordSet) {
+      await bind.mainSetOption(
+          key: kOptionVerificationMethod, value: 'use-permanent-password');
+      await bind.mainSetOption(key: kOptionApproveMode, value: 'password');
+    } else {
+      debugPrint('Managed permanent password could not be configured');
+    }
   }
 
   await bind.mainSetLocalOption(key: 'show-scam-warning', value: 'N');
