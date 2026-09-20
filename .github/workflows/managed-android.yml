@@ -26,7 +26,22 @@ env:
   VERSION: "1.4.9"
 
 jobs:
+  validate-managed-config:
+    name: Validate managed configuration
+    runs-on: ubuntu-24.04
+    env:
+      MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
+    steps:
+      - name: Check required build secrets
+        shell: bash
+        run: |
+          if [ -z "$MANAGED_RUSTDESK_PASSWORD" ]; then
+            echo "::error::Repository secret MANAGED_RUSTDESK_PASSWORD is required for the managed Android build."
+            exit 1
+          fi
+
   generate-android-bridge:
+    needs: validate-managed-config
     name: Generate Android Flutter/Rust bridge
     runs-on: ubuntu-22.04
 
