@@ -190,6 +190,12 @@ jobs:
         shell: bash
         run: |
           cd "$(dirname "$(dirname "$(which flutter)")")"
+
+          # flutter-action restores its SDK from cache. A previous run can
+          # therefore leave this tracked Flutter source patch already applied.
+          # Always reset tracked SDK files before applying RustDesk's patch so
+          # repeated builds are deterministic.
+          git restore .
           git apply "${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
 
       - name: Install Android NDK
