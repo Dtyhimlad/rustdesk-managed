@@ -1,117 +1,44 @@
-# RustDesk Managed Android
+# RustDesk Managed - Internal Deployment Fork
 
-A managed Android fork of [RustDesk](https://github.com/rustdesk/rustdesk) focused on reliable unattended access for self-hosted deployments.
+> **Internal-use project. This is not a public product, public service, or general-purpose RustDesk distribution.**
 
-> **Status:** active development. The working development branch is `managed-android`, pinned to the upstream RustDesk **1.4.9** release baseline.
+This repository contains a customized RustDesk client maintained for a single privately operated deployment. It remains publicly visible because it is a fork of the public upstream RustDesk repository.
 
-## Project goals
+Public access to this source code does **not** provide or imply:
 
-This fork is intentionally focused on functionality rather than branding.
+- access to the operator's RustDesk infrastructure or management platform;
+- permission to register devices with, connect to, or otherwise use that infrastructure;
+- access to unattended-access credentials, enrollment credentials, signing keys, or production configuration;
+- access to supported production binaries, installation services, maintenance, or technical support.
 
-The Android client is being adapted to provide:
+## Project scope
 
-- a preconfigured self-hosted RustDesk rendezvous/relay server;
-- a predefined permanent unattended-access password;
-- automatic registration of the device and RustDesk ID with our management platform;
-- automatic startup of the RustDesk listener/service when the app opens;
-- automatic startup after Android boot;
-- separation of the RustDesk listener from MediaProjection, so merely making the device reachable does **not** immediately trigger the Android screen-sharing prompt;
-- screen-capture permission only when an incoming remote-desktop session actually requires video;
-- compatibility with managed/ADB-provisioned MediaProjection app-op setups where Android permits them;
-- removal/disablement of the floating stop-service window while retaining the Android foreground-service notification required by the operating system.
+The maintained branch contains changes required for the operator's managed Android deployment, including self-hosted RustDesk configuration, managed unattended access, service lifecycle behavior, and internal device enrollment.
 
-## Development baseline
+Production-specific configuration and credentials are supplied separately during controlled builds. They are not intended to be committed to this repository. A third-party clone is not configured or supported for use with the operator's systems.
 
-The `managed-android` branch starts from upstream RustDesk **1.4.9**:
+## Status
 
-- upstream commit: `6c578292e8ebbbec708b76986ba8c4bc7c509747`
-- Flutter: **3.24.5**
-- Rust: **1.75**
-- cargo-ndk: **3.1.2**
-- Android NDK: **r28c**
-- Java: **17**
+The current internal production baseline is derived from RustDesk 1.4.9. Development is maintained on the `managed-android` branch and may diverge from upstream or change without notice.
 
-These versions match the upstream 1.4.9 Android CI configuration.
-
-The repository's `master` branch may continue to follow newer upstream RustDesk development. Managed Android changes should be made against `managed-android` unless the baseline is deliberately upgraded.
-
-## Build strategy
-
-Android builds are produced in GitHub Actions on an x86-64 Ubuntu runner rather than on the local Apple Silicon development machine.
-
-Local development is done on macOS with Android Studio and ADB. GitHub Actions produces the APK, which can then be installed on a test device with:
-
-```bash
-adb install -r inforchannel-rustdesk-1.4.9-arm64-v8a.apk
-```
-
-The initial CI target is **ARM64 / arm64-v8a**. Other Android ABIs can be added after the managed ARM64 build is stable.
-
-## Development roadmap
-
-- [x] Fork created
-- [x] Stable RustDesk 1.4.9 development branch created
-- [x] Reproducible stock ARM64 Android build in GitHub Actions
-- [x] Start RustDesk listener automatically when the app starts
-- [x] Start listener automatically after device boot
-- [x] Decouple listener startup from MediaProjection permission
-- [x] Request/start screen capture only for an actual remote-control session
-- [x] Disable the floating stop-service window
-- [x] Preconfigure the self-hosted RustDesk server and key
-- [x] Configure the permanent unattended password
-- [x] Automatically register RustDesk ID/device metadata with the management platform
-- [x] Make registration idempotent so reinstalling an existing RustDesk ID does not create duplicates
-- [x] Final managed Android application ID (`com.inforchannel.rustdesk`)
-- [ ] Permanent release signing validated in GitHub Actions
-- [ ] Add update/distribution workflow for the self-hosted installer page
-- [ ] Expand builds to additional Android ABIs if required
-
-## Android application identity
-
-The managed Android client uses the final application ID:
-
-```text
-com.inforchannel.rustdesk
-```
-
-The Kotlin/Java source package remains the upstream RustDesk package where possible. The Android `applicationId` is deliberately separate so the managed client can coexist with the official RustDesk application without destabilizing upstream JNI and plugin bindings.
-
-Release APKs are signed with a persistent private keystore supplied to GitHub Actions through repository secrets. The keystore itself is never committed to the repository.
-
-## ADB / MediaProjection testing
-
-A normal development/test device does **not** need to be rooted.
-
-On Android/OEM versions where the app-op is supported, MediaProjection behaviour can be tested with:
-
-```bash
-adb shell appops set com.inforchannel.rustdesk PROJECT_MEDIA allow
-```
-
-This is treated as an optional provisioning mechanism, not as something the application can assume will behave identically on every Android release or vendor ROM.
-
-## Distribution
-
-The intended distribution model is private/self-hosted deployment through the existing installer portal used for the Windows and Linux RustDesk installers.
-
-The Android APK will eventually be published there as an additional installer option.
-
-## Upstream
-
-This project is derived from RustDesk:
-
-- Upstream source: https://github.com/rustdesk/rustdesk
-- Upstream documentation: https://rustdesk.com/docs/
-- Upstream server: https://github.com/rustdesk/rustdesk-server
-
-This repository is an independent managed fork and is not an official RustDesk release.
-
-## License
-
-RustDesk is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This fork retains the upstream licensing requirements.
-
-See [LICENCE](LICENCE) and the upstream RustDesk repository for the full license and attribution information.
+No public release, compatibility promise, installation assistance, or support service is provided from this repository.
 
 ## Authorized use
 
-This project is intended for systems that the operator owns or is authorized to administer. Remote-access deployment should comply with applicable law, organizational policy, and the permissions of the device owner/user.
+Remote-access software must only be installed or used on devices and systems that you own or are explicitly authorized to administer.
+
+Do not attempt to access, enroll with, test against, or interfere with infrastructure that you do not own or have explicit permission to use.
+
+## Upstream project
+
+This project is derived from [RustDesk](https://github.com/rustdesk/rustdesk) and is not an official RustDesk release.
+
+- [RustDesk source](https://github.com/rustdesk/rustdesk)
+- [RustDesk documentation](https://rustdesk.com/docs/)
+- [RustDesk Server](https://github.com/rustdesk/rustdesk-server)
+
+## License
+
+RustDesk is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This fork retains the applicable upstream license and attribution requirements.
+
+See [LICENCE](LICENCE) for the full license text.
