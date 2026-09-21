@@ -95,6 +95,9 @@ class InputService : AccessibilityService() {
     private var lastTouchGestureStartTime = 0L
     private var mouseX = 0
     private var mouseY = 0
+    private var mouseDownX = 0
+    private var mouseDownY = 0
+    private var mouseDragged = false
     private var timer = Timer()
     private var recentActionTask: TimerTask? = null
     // 100(tap timeout) + 400(long press timeout)
@@ -297,8 +300,11 @@ class InputService : AccessibilityService() {
             mouseX = x * SCREEN_INFO.scale
             mouseY = y * SCREEN_INFO.scale
             updateRemoteCursor(mouseX, mouseY)
+            val delta = abs(oldX - mouseX) + abs(oldY - mouseY)
+            if (leftIsDown && delta > 2) {
+                mouseDragged = true
+            }
             if (isWaitingLongPress) {
-                val delta = abs(oldX - mouseX) + abs(oldY - mouseY)
                 Log.d(logTag,"delta:$delta")
                 if (delta > 8) {
                     isWaitingLongPress = false
@@ -319,21 +325,32 @@ class InputService : AccessibilityService() {
             }, longPressDuration)
 
             leftIsDown = true
+            mouseDownX = mouseX
+            mouseDownY = mouseY
+            mouseDragged = false
             startGesture(mouseX, mouseY)
             return
         }
 
-        // left down, was down
-        if (leftIsDown) {
+        // Continue only actual drag packets. Sending a continuation and an end
+        // back-to-back for a simple click is rejected by some Android TV ROMs.
+        if (leftIsDown && mask == LEFT_MOVE) {
             continueGesture(mouseX, mouseY)
         }
 
         // left up, was down
         if (mask == LEFT_UP) {
             if (leftIsDown) {
+                val simpleClick = !mouseDragged && isWaitingLongPress
                 leftIsDown = false
                 isWaitingLongPress = false
-                endGesture(mouseX, mouseY)
+                if (simpleClick) {
+                    stroke = null
+                    touchPath.reset()
+                    performClick(mouseDownX, mouseDownY, ViewConfiguration.getTapTimeout().toLong())
+                } else {
+                    endGesture(mouseX, mouseY)
+                }
                 return
             }
         }
@@ -915,11 +932,19 @@ class InputService : AccessibilityService() {
         super.onServiceConnected()
         ctx = this
         notifyInputState()
-        val info = AccessibilityServiceInfo()
+        // Preserve the manifest-declared gesture capability and configure the
+        // event/feedback fields explicitly. Replacing this with a blank
+        // AccessibilityServiceInfo can make some TV firmware unbind the service.
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_FOCUSED or
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.notificationTimeout = 50
+        info.flags = info.flags or FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         if (Build.VERSION.SDK_INT >= 33) {
-            info.flags = FLAG_INPUT_METHOD_EDITOR or FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-        } else {
-            info.flags = FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            info.flags = info.flags or FLAG_INPUT_METHOD_EDITOR
         }
         setServiceInfo(info)
         fakeEditTextForTextStateCalculation = EditText(this)
