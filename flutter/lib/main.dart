@@ -141,6 +141,8 @@ const _managedEnrollmentUrl =
     String.fromEnvironment('MANAGED_ENROLLMENT_URL');
 const _managedEnrollmentToken =
     String.fromEnvironment('MANAGED_ENROLLMENT_TOKEN');
+const _managedDeviceKind =
+    String.fromEnvironment('MANAGED_DEVICE_KIND', defaultValue: 'machine');
 
 Future<void> registerManagedAndroid() async {
   if (!isAndroid ||
@@ -168,11 +170,13 @@ Future<void> registerManagedAndroid() async {
   }
 
   var hostname = 'Android device';
+  var modelName = '';
   var operatingSystem = 'Android';
   try {
     final info = await DeviceInfoPlugin().androidInfo;
     final manufacturer = info.manufacturer.trim();
     final model = info.model.trim();
+    modelName = model;
     hostname = [manufacturer, model]
         .where((value) => value.isNotEmpty)
         .join(' ')
@@ -186,8 +190,10 @@ Future<void> registerManagedAndroid() async {
     'enrollment_token': _managedEnrollmentToken,
     'rustdesk_id': rustdeskId,
     'rustdesk_password': _managedPermanentPassword,
-    'name': 'New Machine',
+    'device_kind': _managedDeviceKind == 'box' ? 'box' : 'machine',
+    'name': _managedDeviceKind == 'box' ? 'New Box' : 'New Machine',
     'hostname': hostname,
+    'model': modelName,
     'operating_system': operatingSystem,
     'rustdesk_address': rustdeskId,
   });
