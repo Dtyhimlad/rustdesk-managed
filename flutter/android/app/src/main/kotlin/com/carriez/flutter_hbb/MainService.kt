@@ -242,6 +242,7 @@ class MainService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var notificationChannel: String
     private lateinit var notificationBuilder: NotificationCompat.Builder
+    private var explicitShutdown = false
 
     override fun onCreate() {
         super.onCreate()
@@ -266,7 +267,52 @@ class MainService : Service() {
     override fun onDestroy() {
         checkMediaPermission()
         stopService(Intent(this, FloatingWindowService::class.java))
+        if (!explicitShutdown) {
+            scheduleListenerRestart()
+        }
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Some Android TV firmware kills the app process when its task is
+        // dismissed even though MainService is a START_STICKY foreground
+        // service. Schedule an explicit restart to keep the box reachable.
+        scheduleListenerRestart()
+        super.onTaskRemoved(rootIntent)
+    }
+
+    @SuppressLint("UnspecifiedImmutableFlag")
+    private fun scheduleListenerRestart() {
+        val restartIntent = Intent(applicationContext, MainService::class.java).apply {
+            action = ACT_START_LISTENER_SERVICE
+        }
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE
+        } else {
+            FLAG_UPDATE_CURRENT
+        }
+        val restartIntentSender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(
+                applicationContext,
+                3011,
+                restartIntent,
+                pendingIntentFlags
+            )
+        } else {
+            PendingIntent.getService(
+                applicationContext,
+                3011,
+                restartIntent,
+                pendingIntentFlags
+            )
+        }
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.set(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + 1_000L,
+            restartIntentSender
+        )
+        Log.d(logTag, "Listener service restart scheduled")
     }
 
     private var isHalfScale: Boolean? = null;
@@ -672,13 +718,19 @@ class MainService : Service() {
         FFI.setFrameRawEnable("video",true)
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isTvOrConstrainedProcess()) {
             if (!audioRecordHandle.createAudioRecorder(false, mediaProjection)) {
                 Log.d(logTag, "createAudioRecorder fail")
-            } else {
+            } else if (audioRecordHandle.startAudioRecorder()) {
                 Log.d(logTag, "audio recorder start")
-                audioRecordHandle.startAudioRecorder()
+            } else {
+                Log.d(logTag, "audio recorder start failed")
             }
+        } else if (isTvOrConstrainedProcess()) {
+            // Playback-capture support is inconsistent on Android TV firmware.
+            // A rejected float/stereo configuration used to escape as an
+            // exception and terminate the complete RustDesk process.
+            Log.d(logTag, "Skipping system audio capture on TV")
         }
         checkMediaPermission()
         return true
@@ -748,6 +800,7 @@ class MainService : Service() {
 
     fun destroy() {
         Log.d(logTag, "destroy service")
+        explicitShutdown = true
         _isReady = false
         _isAudioStart = false
         pendingCaptureRequest = false

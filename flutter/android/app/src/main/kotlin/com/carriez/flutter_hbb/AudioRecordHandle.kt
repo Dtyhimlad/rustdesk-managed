@@ -79,45 +79,74 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
             return
         }
         // read f32 to byte , length * 4
-        minBufferSize = 2 * 4 * AudioRecord.getMinBufferSize(
+        val platformBufferSize = AudioRecord.getMinBufferSize(
             AUDIO_SAMPLE_RATE,
             AUDIO_CHANNEL_MASK,
             AUDIO_ENCODING
         )
-        if (minBufferSize == 0) {
-            Log.d(logTag, "get min buffer size fail!")
+        if (platformBufferSize <= 0) {
+            minBufferSize = 0
+            Log.d(logTag, "get min buffer size failed: $platformBufferSize")
             return
         }
+        minBufferSize = 2 * 4 * platformBufferSize
         audioReader = AudioReader(minBufferSize, 4)
         Log.d(logTag, "init audioData len:$minBufferSize")
     }
 
     @RequiresApi(Build.VERSION_CODES.M)
-    fun startAudioRecorder() {
-        checkAudioReader()
-        if (audioReader != null && audioRecorder != null && minBufferSize != 0) {
-            try {
-                FFI.setFrameRawEnable("audio", true)
-                audioRecorder!!.startRecording()
-                audioRecordStat = true
-                audioThread = thread {
+    fun startAudioRecorder(): Boolean {
+        return try {
+            checkAudioReader()
+            val reader = audioReader
+            val recorder = audioRecorder
+            if (reader == null || recorder == null || minBufferSize <= 0) {
+                Log.d(logTag, "startAudioRecorder fail")
+                return false
+            }
+
+            recorder.startRecording()
+            if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                throw IllegalStateException("AudioRecord failed to enter recording state")
+            }
+
+            FFI.setFrameRawEnable("audio", true)
+            audioRecordStat = true
+            audioThread = thread {
+                try {
                     while (audioRecordStat) {
-                        audioReader!!.readSync(audioRecorder!!)?.let {
+                        reader.readSync(recorder)?.let {
                             FFI.onAudioFrameUpdate(it)
                         }
                     }
-                    // let's release here rather than onDestroy to avoid threading issue
-                    audioRecorder?.release()
-                    audioRecorder = null
+                } catch (error: Exception) {
+                    Log.e(logTag, "Audio capture thread failed", error)
+                } finally {
+                    try {
+                        recorder.release()
+                    } catch (ignored: Exception) {
+                    }
+                    if (audioRecorder === recorder) {
+                        audioRecorder = null
+                    }
                     minBufferSize = 0
                     FFI.setFrameRawEnable("audio", false)
                     Log.d(logTag, "Exit audio thread")
                 }
-            } catch (e: Exception) {
-                Log.d(logTag, "startAudioRecorder fail:$e")
             }
-        } else {
-            Log.d(logTag, "startAudioRecorder fail")
+            true
+        } catch (error: Exception) {
+            audioRecordStat = false
+            try {
+                audioRecorder?.release()
+            } catch (ignored: Exception) {
+            }
+            audioRecorder = null
+            audioReader = null
+            minBufferSize = 0
+            FFI.setFrameRawEnable("audio", false)
+            Log.e(logTag, "startAudioRecorder fail", error)
+            false
         }
     }
 
