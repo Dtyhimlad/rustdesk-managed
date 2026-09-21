@@ -579,7 +579,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: rustdesk-managed-android-arm
+          name: rustdesk-managed-android-tv-armv7
           path: inforchannel-rustdesk-tv-1.4.9-armeabi-v7a.apk
           if-no-files-found: error
           retention-days: 14
