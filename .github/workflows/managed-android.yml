@@ -345,6 +345,8 @@ jobs:
           flutter pub get
           flutter build apk \
             --release \
+            --build-name=1.4.9.1 \
+            --build-number=68 \
             --target-platform android-arm64 \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
@@ -359,6 +361,8 @@ jobs:
           pushd flutter
           flutter build apk \
             --release \
+            --build-name=1.4.9.1 \
+            --build-number=68 \
             --target-platform android-arm64 \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
@@ -565,6 +569,8 @@ jobs:
           flutter pub get
           flutter build apk \
             --release \
+            --build-name=1.4.9.1 \
+            --build-number=68 \
             --target-platform android-arm \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \

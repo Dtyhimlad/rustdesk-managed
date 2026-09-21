@@ -49,6 +49,7 @@ import kotlin.math.min
 const val DEFAULT_NOTIFY_TITLE = "RustDesk"
 const val DEFAULT_NOTIFY_TEXT = "Service is running"
 const val DEFAULT_NOTIFY_ID = 1
+const val PROJECTION_REQUEST_NOTIFY_ID = 2
 const val NOTIFY_ID_OFFSET = 100
 
 const val ACT_START_LISTENER_SERVICE = "com.inforchannel.rustdesk.START_LISTENER_SERVICE"
@@ -225,6 +226,7 @@ class MainService : Service() {
 
     // video
     private var mediaProjection: MediaProjection? = null
+    private var mediaProjectionCallback: MediaProjection.Callback? = null
     private var surface: Surface? = null
     private val sendVP9Thread = Executors.newSingleThreadExecutor()
     private var videoEncoder: MediaCodec? = null
@@ -268,6 +270,16 @@ class MainService : Service() {
     }
 
     private var isHalfScale: Boolean? = null;
+
+    private fun isTvOrConstrainedProcess(): Boolean {
+        val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
+        val isTv = uiMode == Configuration.UI_MODE_TYPE_TELEVISION ||
+            packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        val is32Bit = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            !android.os.Process.is64Bit()
+        return isTv || is32Bit
+    }
+
     private fun updateScreenInfo(orientation: Int) {
         var w: Int
         var h: Int
@@ -288,19 +300,27 @@ class MainService : Service() {
             dpi = dm.densityDpi
         }
 
-        val max = max(w,h)
-        val min = min(w,h)
+        val maxDimension = max(w,h)
+        val minDimension = min(w,h)
         if (orientation == ORIENTATION_LANDSCAPE) {
-            w = max
-            h = min
+            w = maxDimension
+            h = minDimension
         } else {
-            w = min
-            h = max
+            w = minDimension
+            h = maxDimension
         }
         Log.d(logTag,"updateScreenInfo:w:$w,h:$h")
         var scale = 1
         if (w != 0 && h != 0) {
-            if (isHalfScale == true && (w > MAX_SCREEN_SIZE || h > MAX_SCREEN_SIZE)) {
+            if (isTvOrConstrainedProcess() && maxDimension > 1920) {
+                // Many TV boxes report a 4K display while giving 32-bit apps a
+                // small heap. Four full-size RGBA buffers can exceed 125 MiB.
+                scale = (maxDimension + 1919) / 1920
+                w /= scale
+                h /= scale
+                dpi = max(1, dpi / scale)
+                Log.d(logTag, "TV capture limited to " + w + "x" + h + ", scale:" + scale)
+            } else if (isHalfScale == true && (w > MAX_SCREEN_SIZE || h > MAX_SCREEN_SIZE)) {
                 scale = 2
                 w /= scale
                 h /= scale
@@ -360,15 +380,21 @@ class MainService : Service() {
                     getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
                 intent.getParcelableExtra<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)?.let {
-                    mediaProjection =
-                        mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, it)
+                    notificationManager.cancel(PROJECTION_REQUEST_NOTIFY_ID)
                     projectionRequestInFlight = false
-                    _isReady = true
-                    checkMediaPermission()
+                    if (replaceMediaProjection(mediaProjectionManager, it)) {
+                        _isReady = true
+                        checkMediaPermission()
 
-                    if (pendingCaptureRequest) {
+                        if (pendingCaptureRequest) {
+                            pendingCaptureRequest = false
+                            startCapture()
+                        }
+                    } else {
                         pendingCaptureRequest = false
-                        startCapture()
+                        _isReady = false
+                        checkMediaPermission()
+                        Log.e(logTag, "Android returned an invalid MediaProjection token")
                     }
                 } ?: run {
                     Log.d(logTag, "MediaProjection result missing; requesting capture permission")
@@ -377,6 +403,7 @@ class MainService : Service() {
             }
 
             ACT_MEDIA_PROJECTION_DENIED -> {
+                notificationManager.cancel(PROJECTION_REQUEST_NOTIFY_ID)
                 projectionRequestInFlight = false
                 pendingCaptureRequest = false
                 _isReady = false
@@ -424,49 +451,178 @@ class MainService : Service() {
     private fun requestMediaProjection() {
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
 
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            projectionRequestInFlight = false
-            pendingCaptureRequest = false
-            Log.e(logTag, "Failed to launch MediaProjection permission flow", e)
+        if (MainActivity.isInForeground || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            try {
+                startActivity(intent)
+                return
+            } catch (e: Exception) {
+                Log.w(logTag, "Direct MediaProjection permission launch failed", e)
+            }
         }
+
+        // Android 10+ can block activities launched by a background service.
+        // A full-screen notification is allowed to surface on TV; on devices
+        // that suppress it, the same notification remains selectable.
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE
+        } else {
+            FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            PROJECTION_REQUEST_NOTIFY_ID,
+            intent,
+            pendingIntentFlags
+        )
+        val notification = NotificationCompat.Builder(this, notificationChannel)
+            .setSmallIcon(R.mipmap.ic_stat_logo)
+            .setContentTitle("Remote access request")
+            .setContentText("Select to allow screen sharing")
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setFullScreenIntent(pendingIntent, true)
+            .build()
+        notificationManager.notify(PROJECTION_REQUEST_NOTIFY_ID, notification)
     }
 
     @SuppressLint("WrongConstant")
     private fun createSurface(): Surface? {
-        return if (useVP9) {
+        if (useVP9) {
             // TODO
-            null
-        } else {
-            Log.d(logTag, "ImageReader.newInstance:INFO:$SCREEN_INFO")
-            imageReader =
-                ImageReader.newInstance(
-                    SCREEN_INFO.width,
-                    SCREEN_INFO.height,
-                    PixelFormat.RGBA_8888,
-                    4
-                ).apply {
-                    setOnImageAvailableListener({ imageReader: ImageReader ->
-                        try {
-                            // If not call acquireLatestImage, listener will not be called again
-                            imageReader.acquireLatestImage().use { image ->
-                                if (image == null || !isStart) return@setOnImageAvailableListener
-                                val planes = image.planes
-                                val buffer = planes[0].buffer
-                                buffer.rewind()
-                                FFI.onVideoFrameUpdate(buffer)
-                            }
-                        } catch (ignored: java.lang.Exception) {
+            return null
+        }
+
+        return try {
+            val maxImages = if (isTvOrConstrainedProcess()) 2 else 4
+            Log.d(logTag, "ImageReader.newInstance:INFO:$SCREEN_INFO buffers:$maxImages")
+            imageReader = ImageReader.newInstance(
+                SCREEN_INFO.width,
+                SCREEN_INFO.height,
+                PixelFormat.RGBA_8888,
+                maxImages
+            ).apply {
+                setOnImageAvailableListener({ imageReader: ImageReader ->
+                    try {
+                        // If not call acquireLatestImage, listener will not be called again
+                        imageReader.acquireLatestImage().use { image ->
+                            if (image == null || !isStart) return@setOnImageAvailableListener
+                            val buffer = image.planes[0].buffer
+                            buffer.rewind()
+                            FFI.onVideoFrameUpdate(buffer)
                         }
-                    }, serviceHandler)
-                }
+                    } catch (ignored: Exception) {
+                    }
+                }, serviceHandler)
+            }
             Log.d(logTag, "ImageReader.setOnImageAvailableListener done")
             imageReader?.surface
+        } catch (error: Throwable) {
+            // Vendor TV firmware may throw an Error rather than an Exception
+            // when graphic buffers cannot be allocated.
+            Log.e(logTag, "Unable to allocate the screen capture surface", error)
+            imageReader = null
+            null
         }
+    }
+
+    @Synchronized
+    private fun replaceMediaProjection(
+        manager: MediaProjectionManager,
+        resultIntent: Intent
+    ): Boolean {
+        val projection = try {
+            manager.getMediaProjection(Activity.RESULT_OK, resultIntent)
+        } catch (e: Exception) {
+            Log.e(logTag, "Failed to create MediaProjection", e)
+            null
+        } ?: return false
+
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                Handler(Looper.getMainLooper()).post {
+                    handleMediaProjectionStopped(projection)
+                }
+            }
+        }
+
+        try {
+            projection.registerCallback(callback, Handler(Looper.getMainLooper()))
+        } catch (e: Exception) {
+            Log.e(logTag, "Failed to register MediaProjection callback", e)
+            try {
+                projection.stop()
+            } catch (ignored: Exception) {
+            }
+            return false
+        }
+
+        releaseMediaProjection()
+        mediaProjection = projection
+        mediaProjectionCallback = callback
+        return true
+    }
+
+    @Synchronized
+    private fun handleMediaProjectionStopped(stoppedProjection: MediaProjection) {
+        if (mediaProjection !== stoppedProjection) {
+            return
+        }
+
+        Log.w(logTag, "MediaProjection was stopped by Android")
+        stopCapture(releaseProjection = false)
+        try {
+            virtualDisplay?.release()
+        } catch (ignored: Exception) {
+        }
+        virtualDisplay = null
+        mediaProjection = null
+        mediaProjectionCallback = null
+        pendingCaptureRequest = false
+        projectionRequestInFlight = false
+        _isReady = false
+        checkMediaPermission()
+    }
+
+    @Synchronized
+    private fun releaseMediaProjection() {
+        val projection = mediaProjection
+        val callback = mediaProjectionCallback
+        mediaProjection = null
+        mediaProjectionCallback = null
+
+        if (projection != null && callback != null) {
+            try {
+                projection.unregisterCallback(callback)
+            } catch (e: Exception) {
+                Log.w(logTag, "Failed to unregister MediaProjection callback", e)
+            }
+        }
+        try {
+            projection?.stop()
+        } catch (e: Exception) {
+            Log.w(logTag, "Failed to stop MediaProjection cleanly", e)
+        }
+    }
+
+    private fun releaseFailedVideoCapture() {
+        try {
+            virtualDisplay?.release()
+        } catch (ignored: Exception) {
+        }
+        virtualDisplay = null
+        imageReader?.close()
+        imageReader = null
+        try {
+            surface?.release()
+        } catch (ignored: Exception) {
+        }
+        surface = null
     }
 
     fun onVoiceCallStarted(): Boolean {
@@ -477,24 +633,44 @@ class MainService : Service() {
         return audioRecordHandle.onVoiceCallClosed(mediaProjection)
     }
 
+    @Synchronized
     fun startCapture(): Boolean {
         if (isStart) {
             return true
         }
-        if (mediaProjection == null) {
-            Log.w(logTag, "startCapture fail,mediaProjection is null")
+        val projection = mediaProjection
+        if (projection == null) {
+            Log.w(logTag, "startCapture fail, mediaProjection is null")
             return false
         }
-        
+
         updateScreenInfo(resources.configuration.orientation)
         Log.d(logTag, "Start Capture")
-        surface = createSurface()
 
-        if (useVP9) {
-            startVP9VideoRecorder(mediaProjection!!)
-        } else {
-            startRawVideoRecorder(mediaProjection!!)
+        val videoStarted = try {
+            surface = createSurface()
+            if (surface == null) {
+                false
+            } else if (useVP9) {
+                startVP9VideoRecorder(projection)
+            } else {
+                startRawVideoRecorder(projection)
+            }
+        } catch (error: Throwable) {
+            Log.e(logTag, "Screen capture initialization failed", error)
+            false
         }
+
+        if (!videoStarted) {
+            releaseFailedVideoCapture()
+            _isStart = false
+            checkMediaPermission()
+            return false
+        }
+
+        _isStart = true
+        FFI.setFrameRawEnable("video",true)
+        MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!audioRecordHandle.createAudioRecorder(false, mediaProjection)) {
@@ -505,9 +681,6 @@ class MainService : Service() {
             }
         }
         checkMediaPermission()
-        _isStart = true
-        FFI.setFrameRawEnable("video",true)
-        MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
         return true
     }
 
@@ -564,16 +737,11 @@ class MainService : Service() {
         audioRecordHandle.tryReleaseAudio()
 
         if (releaseProjection) {
-            val projection = mediaProjection
-            mediaProjection = null
+            notificationManager.cancel(PROJECTION_REQUEST_NOTIFY_ID)
             pendingCaptureRequest = false
             projectionRequestInFlight = false
             _isReady = false
-            try {
-                projection?.stop()
-            } catch (e: Exception) {
-                Log.w(logTag, "Failed to stop MediaProjection cleanly", e)
-            }
+            releaseMediaProjection()
             checkMediaPermission()
         }
     }
@@ -607,46 +775,47 @@ class MainService : Service() {
         return isReady
     }
 
-    private fun startRawVideoRecorder(mp: MediaProjection) {
+    private fun startRawVideoRecorder(mp: MediaProjection): Boolean {
         Log.d(logTag, "startRawVideoRecorder,screen info:$SCREEN_INFO")
-        if (surface == null) {
-            Log.d(logTag, "startRawVideoRecorder failed,surface is null")
-            return
+        val captureSurface = surface
+        if (captureSurface == null) {
+            Log.d(logTag, "startRawVideoRecorder failed, surface is null")
+            return false
         }
-        createOrSetVirtualDisplay(mp, surface!!)
+        return createOrSetVirtualDisplay(mp, captureSurface)
     }
 
-    private fun startVP9VideoRecorder(mp: MediaProjection) {
+    private fun startVP9VideoRecorder(mp: MediaProjection): Boolean {
         createMediaCodec()
-        videoEncoder?.let {
-            surface = it.createInputSurface()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                surface!!.setFrameRate(1F, FRAME_RATE_COMPATIBILITY_DEFAULT)
-            }
-            it.setCallback(cb)
-            it.start()
-            createOrSetVirtualDisplay(mp, surface!!)
+        val encoder = videoEncoder ?: return false
+        surface = encoder.createInputSurface()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            surface!!.setFrameRate(1F, FRAME_RATE_COMPATIBILITY_DEFAULT)
         }
+        encoder.setCallback(cb)
+        encoder.start()
+        return createOrSetVirtualDisplay(mp, surface!!)
     }
 
     // https://github.com/bk138/droidVNC-NG/blob/b79af62db5a1c08ed94e6a91464859ffed6f4e97/app/src/main/java/net/christianbeier/droidvnc_ng/MediaProjectionService.java#L250
     // Reuse virtualDisplay if it exists, to avoid media projection confirmation dialog every connection.
-    private fun createOrSetVirtualDisplay(mp: MediaProjection, s: Surface) {
-        try {
+    private fun createOrSetVirtualDisplay(mp: MediaProjection, s: Surface): Boolean {
+        return try {
             virtualDisplay?.let {
                 it.resize(SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi)
                 it.setSurface(s)
-            } ?: let {
+            } ?: run {
                 virtualDisplay = mp.createVirtualDisplay(
                     "RustDeskVD",
-                    SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi, VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi,
+                    VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     s, null, null
                 )
             }
-        } catch (e: SecurityException) {
-            Log.w(logTag, "createOrSetVirtualDisplay: got SecurityException, re-requesting confirmation");
-            // This initiates a prompt dialog for the user to confirm screen projection.
-            requestMediaProjection()
+            virtualDisplay != null
+        } catch (error: Throwable) {
+            Log.e(logTag, "Unable to create the screen capture display", error)
+            false
         }
     }
 

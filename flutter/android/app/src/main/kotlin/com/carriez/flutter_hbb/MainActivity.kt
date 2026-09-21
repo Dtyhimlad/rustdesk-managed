@@ -37,6 +37,10 @@ import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     companion object {
+        @Volatile
+        var isInForeground = false
+            private set
+
         var flutterMethodChannel: MethodChannel? = null
         private var _rdClipboardManager: RdClipboardManager? = null
         val rdClipboardManager: RdClipboardManager?
@@ -417,6 +421,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onStop() {
+        isInForeground = false
         super.onStop()
         val disableFloatingWindow = FFI.getLocalOption("disable-floating-window") == "Y"
         if (!disableFloatingWindow && MainService.isReady) {
@@ -426,6 +431,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onStart() {
         super.onStart()
+        isInForeground = true
         stopService(Intent(this, FloatingWindowService::class.java))
     }
 }
