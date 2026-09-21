@@ -427,6 +427,7 @@ class MainService : Service() {
 
                 intent.getParcelableExtra<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)?.let {
                     notificationManager.cancel(PROJECTION_REQUEST_NOTIFY_ID)
+                    InputService.ctx?.hideProjectionRequestOverlay()
                     projectionRequestInFlight = false
                     if (replaceMediaProjection(mediaProjectionManager, it)) {
                         _isReady = true
@@ -450,6 +451,7 @@ class MainService : Service() {
 
             ACT_MEDIA_PROJECTION_DENIED -> {
                 notificationManager.cancel(PROJECTION_REQUEST_NOTIFY_ID)
+                InputService.ctx?.hideProjectionRequestOverlay()
                 projectionRequestInFlight = false
                 pendingCaptureRequest = false
                 _isReady = false
@@ -509,9 +511,13 @@ class MainService : Service() {
             }
         }
 
-        // Android 10+ can block activities launched by a background service.
-        // A full-screen notification is allowed to surface on TV; on devices
-        // that suppress it, the same notification remains selectable.
+        // Android TV often suppresses heads-up notifications. When the
+        // accessibility input service is active, show a focusable TV overlay;
+        // its user click can legally open the system MediaProjection dialog.
+        InputService.ctx?.showProjectionRequestOverlay()
+
+        // Keep the notification as a fallback for phones and boxes where the
+        // accessibility input service has not yet been enabled.
         val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE
         } else {
@@ -739,6 +745,8 @@ class MainService : Service() {
     @Synchronized
     fun stopCapture(releaseProjection: Boolean = false) {
         Log.d(logTag, "Stop Capture, releaseProjection:$releaseProjection")
+        InputService.ctx?.hideProjectionRequestOverlay()
+        InputService.ctx?.hideRemoteCursor()
         FFI.setFrameRawEnable("video",false)
         _isStart = false
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)

@@ -9,18 +9,27 @@ package com.carriez.flutter_hbb
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.Button
 import android.widget.EditText
 import android.view.accessibility.AccessibilityEvent
 import android.view.ViewGroup.LayoutParams
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.KeyEvent as KeyEventAndroid
+import android.view.Gravity
+import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowManager
 import android.graphics.Rect
 import android.media.AudioManager
 import android.accessibilityservice.AccessibilityServiceInfo
@@ -97,10 +106,185 @@ class InputService : AccessibilityService() {
 
     private var fakeEditTextForTextStateCalculation: EditText? = null
 
+    private val overlayWindowManager: WindowManager by lazy {
+        getSystemService(WINDOW_SERVICE) as WindowManager
+    }
+    private val overlayHandler = Handler(Looper.getMainLooper())
+    private var remoteCursorView: View? = null
+    private var remoteCursorParams: WindowManager.LayoutParams? = null
+    private var projectionRequestView: Button? = null
+    private var projectionRequestTimeout: Runnable? = null
+
     private var lastX = 0
     private var lastY = 0
 
     private val volumeController: VolumeController by lazy { VolumeController(applicationContext.getSystemService(AUDIO_SERVICE) as AudioManager) }
+
+    private fun isTvDevice(): Boolean {
+        val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
+        return uiMode == Configuration.UI_MODE_TYPE_TELEVISION ||
+            packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    }
+
+    private fun updateRemoteCursor(x: Int, y: Int) {
+        if (!isTvDevice()) return
+        overlayHandler.post {
+            try {
+                var cursor = remoteCursorView
+                var params = remoteCursorParams
+                if (cursor == null || params == null) {
+                    val size = (22 * resources.displayMetrics.density).toInt().coerceAtLeast(22)
+                    val cursorBackground = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(Color.argb(230, 255, 255, 255))
+                        setStroke((2 * resources.displayMetrics.density).toInt().coerceAtLeast(2), Color.BLACK)
+                    }
+                    cursor = View(this).apply {
+                        background = cursorBackground
+                        elevation = 12f
+                    }
+                    params = WindowManager.LayoutParams(
+                        size,
+                        size,
+                        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.START
+                    }
+                    overlayWindowManager.addView(cursor, params)
+                    remoteCursorView = cursor
+                    remoteCursorParams = params
+                }
+
+                params.x = (x - params.width / 2).coerceAtLeast(0)
+                params.y = (y - params.height / 2).coerceAtLeast(0)
+                overlayWindowManager.updateViewLayout(cursor, params)
+            } catch (error: Exception) {
+                Log.e(logTag, "Unable to update TV cursor overlay", error)
+            }
+        }
+    }
+
+    fun hideRemoteCursor() {
+        overlayHandler.post {
+            remoteCursorView?.let {
+                try {
+                    overlayWindowManager.removeView(it)
+                } catch (ignored: Exception) {
+                }
+            }
+            remoteCursorView = null
+            remoteCursorParams = null
+        }
+    }
+
+    fun showProjectionRequestOverlay() {
+        if (!isTvDevice()) return
+        overlayHandler.post {
+            if (projectionRequestView != null) return@post
+            try {
+                val horizontalPadding = (28 * resources.displayMetrics.density).toInt()
+                val verticalPadding = (18 * resources.displayMetrics.density).toInt()
+                val requestButton = Button(this).apply {
+                    text = "Remote support request\nPress OK to allow screen sharing"
+                    textSize = 20f
+                    isAllCaps = false
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+                    setOnClickListener {
+                        removeProjectionRequestOverlay()
+                        val permissionIntent =
+                            Intent(this@InputService, PermissionRequestTransparentActivity::class.java).apply {
+                                action = ACT_REQUEST_MEDIA_PROJECTION
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            }
+                        try {
+                            startActivity(permissionIntent)
+                        } catch (error: Exception) {
+                            Log.e(logTag, "Unable to open screen sharing permission", error)
+                        }
+                    }
+                }
+                val params = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.CENTER
+                }
+                overlayWindowManager.addView(requestButton, params)
+                projectionRequestView = requestButton
+                requestButton.requestFocus()
+
+                val timeout = Runnable { removeProjectionRequestOverlay() }
+                projectionRequestTimeout = timeout
+                overlayHandler.postDelayed(timeout, 60_000L)
+            } catch (error: Exception) {
+                Log.e(logTag, "Unable to show screen sharing request overlay", error)
+            }
+        }
+    }
+
+    fun hideProjectionRequestOverlay() {
+        overlayHandler.post { removeProjectionRequestOverlay() }
+    }
+
+    private fun removeProjectionRequestOverlay() {
+        projectionRequestTimeout?.let { overlayHandler.removeCallbacks(it) }
+        projectionRequestTimeout = null
+        projectionRequestView?.let {
+            try {
+                overlayWindowManager.removeView(it)
+            } catch (ignored: Exception) {
+            }
+        }
+        projectionRequestView = null
+    }
+
+    private fun moveTvAccessibilityFocus(direction: Int): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val current = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root
+        val next = current.focusSearch(direction) ?: return false
+        val accessibilityFocused =
+            next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+        val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        return accessibilityFocused || inputFocused
+    }
+
+    private fun clickTvAccessibilityFocus(): Boolean {
+        val node = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: rootInActiveWindow
+            ?: return false
+        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    private fun tryHandleTvNavigationKey(event: KeyEventAndroid): Boolean {
+        if (!isTvDevice() || event.action != KeyEventAndroid.ACTION_DOWN) return false
+        return when (event.keyCode) {
+            KeyEventAndroid.KEYCODE_DPAD_UP -> moveTvAccessibilityFocus(View.FOCUS_UP)
+            KeyEventAndroid.KEYCODE_DPAD_DOWN -> moveTvAccessibilityFocus(View.FOCUS_DOWN)
+            KeyEventAndroid.KEYCODE_DPAD_LEFT -> moveTvAccessibilityFocus(View.FOCUS_LEFT)
+            KeyEventAndroid.KEYCODE_DPAD_RIGHT -> moveTvAccessibilityFocus(View.FOCUS_RIGHT)
+            KeyEventAndroid.KEYCODE_TAB -> moveTvAccessibilityFocus(View.FOCUS_FORWARD)
+            KeyEventAndroid.KEYCODE_DPAD_CENTER,
+            KeyEventAndroid.KEYCODE_ENTER,
+            KeyEventAndroid.KEYCODE_NUMPAD_ENTER,
+            KeyEventAndroid.KEYCODE_SPACE -> clickTvAccessibilityFocus()
+            KeyEventAndroid.KEYCODE_BACK,
+            KeyEventAndroid.KEYCODE_ESCAPE -> performGlobalAction(GLOBAL_ACTION_BACK)
+            else -> false
+        }
+    }
 
     @RequiresApi(Build.VERSION_CODES.N)
     fun onMouseInput(mask: Int, _x: Int, _y: Int) {
@@ -112,6 +296,7 @@ class InputService : AccessibilityService() {
             val oldY = mouseY
             mouseX = x * SCREEN_INFO.scale
             mouseY = y * SCREEN_INFO.scale
+            updateRemoteCursor(mouseX, mouseY)
             if (isWaitingLongPress) {
                 val delta = abs(oldX - mouseX) + abs(oldY - mouseY)
                 Log.d(logTag,"delta:$delta")
@@ -426,6 +611,8 @@ class InputService : AccessibilityService() {
             if (tryHandleVolumeKeyEvent(event)) {
                 return
             } else if (tryHandlePowerKeyEvent(event)) {
+                return
+            } else if (tryHandleTvNavigationKey(event)) {
                 return
             }
         }
@@ -745,6 +932,8 @@ class InputService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        hideProjectionRequestOverlay()
+        hideRemoteCursor()
         ctx = null
         // Keep this fallback even though onUnbind usually notifies first.
         notifyInputState()
@@ -752,6 +941,8 @@ class InputService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        hideProjectionRequestOverlay()
+        hideRemoteCursor()
         ctx = null
         notifyInputState()
         return super.onUnbind(intent)
