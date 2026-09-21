@@ -1,4 +1,4 @@
-name: Managed Android ARM64
+name: Managed Android and TV
 
 on:
   push:
@@ -349,16 +349,237 @@ jobs:
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
             --dart-define=MANAGED_ENROLLMENT_URL="$MANAGED_ENROLLMENT_URL" \
-            --dart-define=MANAGED_ENROLLMENT_TOKEN="$MANAGED_ENROLLMENT_TOKEN"
+            --dart-define=MANAGED_ENROLLMENT_TOKEN="$MANAGED_ENROLLMENT_TOKEN" \
+            --dart-define=MANAGED_DEVICE_KIND="machine"
           popd
 
           cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
              ./inforchannel-rustdesk-1.4.9-arm64-v8a.apk
 
+          pushd flutter
+          flutter build apk \
+            --release \
+            --target-platform android-arm64 \
+            --split-per-abi \
+            --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
+            --dart-define=MANAGED_ENROLLMENT_URL="$MANAGED_ENROLLMENT_URL" \
+            --dart-define=MANAGED_ENROLLMENT_TOKEN="$MANAGED_ENROLLMENT_TOKEN" \
+            --dart-define=MANAGED_DEVICE_KIND="box"
+          popd
+
+          cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+             ./inforchannel-rustdesk-tv-1.4.9-arm64-v8a.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rustdesk-managed-android-arm64
-          path: inforchannel-rustdesk-1.4.9-arm64-v8a.apk
+          path: |
+            inforchannel-rustdesk-1.4.9-arm64-v8a.apk
+            inforchannel-rustdesk-tv-1.4.9-arm64-v8a.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  build-tv-armv7:
+    name: Build managed Android TV ARMv7
+    needs: generate-android-bridge
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            gcc-multilib \
+            git \
+            g++ \
+            g++-multilib \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libc6-dev \
+            libclang-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgtk-3-dev \
+            libpam0g-dev \
+            libpulse-dev \
+            libva-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
+            llvm-dev \
+            nasm \
+            ninja-build \
+            openjdk-17-jdk-headless \
+            pkg-config \
+            tree \
+            wget
+
+      - name: Checkout source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+          cache: true
+
+      - name: Patch Flutter 3.24.5
+        shell: bash
+        run: |
+          cd "$(dirname "$(dirname "$(which flutter)")")"
+
+          # flutter-action restores its SDK from cache. A previous run can
+          # therefore leave this tracked Flutter source patch already applied.
+          # Always reset tracked SDK files before applying RustDesk's patch so
+          # repeated builds are deterministic.
+          git restore .
+          git apply "${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Build Android native dependencies
+        shell: bash
+        run: |
+          if ! ./flutter/build_android_deps.sh armeabi-v7a; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r log; do
+              echo "===== $log ====="
+              cat "$log"
+            done
+            exit 1
+          fi
+
+      - name: Restore Flutter/Rust bridge
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: armv7-linux-androideabi
+          components: rustfmt
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: rustdesk-managed-android
+          key: armv7-linux-androideabi
+
+      - name: Build RustDesk Android library
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          rustup target add armv7-linux-androideabi
+          cargo install cargo-ndk --version "${CARGO_NDK_VERSION}" --locked
+          ./flutter/ndk_arm.sh
+
+          mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
+          cp ./target/armv7-linux-androideabi/release/liblibrustdesk.so \
+             ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+          cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so" \
+             ./flutter/android/app/src/main/jniLibs/armeabi-v7a/
+
+      - name: Build ARMv7 TV APK
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+          MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
+          MANAGED_ENROLLMENT_URL: ${{ secrets.MANAGED_ENROLLMENT_URL }}
+          MANAGED_ENROLLMENT_TOKEN: ${{ secrets.MANAGED_ENROLLMENT_TOKEN }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          export PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
+
+          sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" \
+            ./flutter/android/gradle.properties
+          KEYSTORE_PATH="./flutter/android/app/managed-release.jks"
+          KEY_PROPERTIES="./flutter/android/key.properties"
+          cleanup_signing_files() {
+            rm -f "$KEYSTORE_PATH" "$KEY_PROPERTIES"
+          }
+          trap cleanup_signing_files EXIT
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "::error::Decoded Android keystore is empty."
+            exit 1
+          fi
+
+          cat > "$KEY_PROPERTIES" <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=managed-release.jks
+          EOF
+
+          pushd flutter
+          flutter pub get
+          flutter build apk \
+            --release \
+            --target-platform android-arm \
+            --split-per-abi \
+            --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
+            --dart-define=MANAGED_ENROLLMENT_URL="$MANAGED_ENROLLMENT_URL" \
+            --dart-define=MANAGED_ENROLLMENT_TOKEN="$MANAGED_ENROLLMENT_TOKEN" \
+            --dart-define=MANAGED_DEVICE_KIND="box"
+          popd
+
+          cp ./flutter/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+             ./inforchannel-rustdesk-tv-1.4.9-armeabi-v7a.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-managed-android-arm
+          path: inforchannel-rustdesk-tv-1.4.9-armeabi-v7a.apk
           if-no-files-found: error
           retention-days: 14
