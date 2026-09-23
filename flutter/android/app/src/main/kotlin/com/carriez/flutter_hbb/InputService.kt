@@ -98,6 +98,7 @@ class InputService : AccessibilityService() {
     private var mouseDownX = 0
     private var mouseDownY = 0
     private var mouseDragged = false
+    private var remoteControlDown = false
     private var timer = Timer()
     private var recentActionTask: TimerTask? = null
     // 100(tap timeout) + 400(long press timeout)
@@ -361,6 +362,23 @@ class InputService : AccessibilityService() {
             ?: nodes.firstOrNull { it.node.isAccessibilityFocused || it.node.isFocused }?.node
             ?: root
         val currentBounds = Rect().also { current.getBoundsInScreen(it) }
+
+        // Prefer Android's native TV focus order. Reject only a clearly
+        // cross-axis result (for example, LEFT returned for an UP request),
+        // which is seen in a few vendor player UIs.
+        current.focusSearch(direction)?.let { nativeNext ->
+            val nativeBounds = Rect().also { nativeNext.getBoundsInScreen(it) }
+            val nativeDirectionMatches = current == root ||
+                direction == View.FOCUS_FORWARD ||
+                direction == View.FOCUS_BACKWARD ||
+                nativeBounds == currentBounds ||
+                directionalScore(currentBounds, nativeBounds, direction) != null
+            if (nativeDirectionMatches && focusTvNode(nativeNext)) {
+                Log.d(logTag, "TV native focus direction:$direction success:true")
+                return true
+            }
+        }
+
         val next = nodes
             .asSequence()
             .filter {
@@ -370,12 +388,16 @@ class InputService : AccessibilityService() {
             }
             .minByOrNull { directionalScore(currentBounds, it.bounds, direction) ?: Long.MAX_VALUE }
             ?.node
-            ?: current.focusSearch(direction)
             ?: return false
+        val focused = focusTvNode(next)
+        Log.d(logTag, "TV spatial focus direction:$direction success:$focused")
+        return focused
+    }
+
+    private fun focusTvNode(node: AccessibilityNodeInfo): Boolean {
         val accessibilityFocused =
-            next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
-        val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        Log.d(logTag, "TV spatial focus direction:$direction success:${accessibilityFocused || inputFocused}")
+            node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+        val inputFocused = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         return accessibilityFocused || inputFocused
     }
 
@@ -443,9 +465,10 @@ class InputService : AccessibilityService() {
 
     private fun isRemotePasteShortcut(
         keyEvent: KeyEvent,
-        event: KeyEventAndroid?
+        event: KeyEventAndroid?,
+        textToCommit: String?
     ): Boolean {
-        val controlPressed = event?.isCtrlPressed == true ||
+        val controlPressed = remoteControlDown || event?.isCtrlPressed == true ||
             keyEvent.getModifiersList().any {
                 it == hbb.MessageOuterClass.ControlKey.Control ||
                     it == hbb.MessageOuterClass.ControlKey.RControl
@@ -453,7 +476,20 @@ class InputService : AccessibilityService() {
         if (!controlPressed) return false
         val chr = if (keyEvent.hasChr()) keyEvent.getChr() else -1
         return event?.keyCode == KeyEventAndroid.KEYCODE_V ||
-            chr == 'v'.code || chr == 'V'.code || chr == KeyEventAndroid.KEYCODE_V
+            chr == 'v'.code || chr == 'V'.code || chr == KeyEventAndroid.KEYCODE_V ||
+            textToCommit?.equals("v", ignoreCase = true) == true
+    }
+
+    private fun updateRemoteControlState(keyEvent: KeyEvent) {
+        if (!keyEvent.hasControlKey()) return
+        val controlKey = keyEvent.getControlKey()
+        if (
+            controlKey == hbb.MessageOuterClass.ControlKey.Control ||
+            controlKey == hbb.MessageOuterClass.ControlKey.RControl
+        ) {
+            remoteControlDown = keyEvent.getDown() && !keyEvent.getPress()
+            Log.d(logTag, "Remote control key held:$remoteControlDown")
+        }
     }
 
     private fun pasteRemoteClipboardText(): Boolean {
@@ -462,6 +498,13 @@ class InputService : AccessibilityService() {
             ?: return false
         val event = KeyEventAndroid(KeyEventAndroid.ACTION_DOWN, KeyEventAndroid.KEYCODE_UNKNOWN)
         for (node in possibleAccessibiltyNodes()) {
+            if (
+                node.isEditable &&
+                node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            ) {
+                Log.d(logTag, "Remote clipboard pasted through accessibility action")
+                return true
+            }
             if (trySendKeyEvent(event, node, text)) {
                 Log.d(logTag, "Remote clipboard inserted into focused field")
                 return true
@@ -469,6 +512,96 @@ class InputService : AccessibilityService() {
         }
         Log.w(logTag, "Remote clipboard received but no editable field is focused")
         return false
+    }
+
+    private fun nodeSupportsAction(node: AccessibilityNodeInfo, action: Int): Boolean {
+        return node.actionList.any { it.id == action }
+    }
+
+    private fun scrollNodeOrParent(node: AccessibilityNodeInfo?, action: Int): Boolean {
+        var current = node
+        repeat(32) {
+            val candidate = current ?: return false
+            if (
+                (candidate.isScrollable || nodeSupportsAction(candidate, action)) &&
+                candidate.performAction(action)
+            ) {
+                return true
+            }
+            val parent = candidate.parent
+            if (parent == candidate) return false
+            current = parent
+        }
+        return false
+    }
+
+    private fun scrollTvAccessibility(forward: Boolean): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val action = if (forward) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        } else {
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        }
+        val nodes = mutableListOf<NodeSnapshot>()
+        collectVisibleNodes(root, nodes)
+
+        // Mouse-wheel semantics: prefer the scrollable element under the
+        // remote cursor, then the focused element, then any visible scroller.
+        val underCursor = nodes
+            .asSequence()
+            .filter { it.bounds.contains(mouseX, mouseY) }
+            .sortedBy { it.bounds.width().toLong() * it.bounds.height().toLong() }
+        for (snapshot in underCursor) {
+            if (scrollNodeOrParent(snapshot.node, action)) return true
+        }
+
+        val focused = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (scrollNodeOrParent(focused, action)) return true
+
+        for (snapshot in nodes) {
+            if (
+                nodeSupportsAction(snapshot.node, action) &&
+                snapshot.node.performAction(action)
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    @RequiresApi(Build.VERSION_CODES.N)
+    private fun enqueueWheelGesture(forward: Boolean) {
+        val maxX = (resources.displayMetrics.widthPixels - 1).coerceAtLeast(0)
+        val maxY = (resources.displayMetrics.heightPixels - 1).coerceAtLeast(0)
+        var startY = mouseY.coerceIn(0, maxY)
+        var endY = (startY + if (forward) -WHEEL_STEP else WHEEL_STEP).coerceIn(0, maxY)
+        if (startY == endY && maxY > 0) {
+            startY = if (forward) WHEEL_STEP.coerceAtMost(maxY) else (maxY - WHEEL_STEP).coerceAtLeast(0)
+            endY = (startY + if (forward) -WHEEL_STEP else WHEEL_STEP).coerceIn(0, maxY)
+        }
+        if (startY == endY) return
+
+        val path = Path().apply {
+            moveTo(mouseX.coerceIn(0, maxX).toFloat(), startY.toFloat())
+            lineTo(mouseX.coerceIn(0, maxX).toFloat(), endY.toFloat())
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, WHEEL_DURATION)
+        wheelActionsQueue.offer(GestureDescription.Builder().addStroke(stroke).build())
+        consumeWheelActions()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.N)
+    private fun performWheelScroll(forward: Boolean) {
+        if (!isTvDevice()) {
+            enqueueWheelGesture(forward)
+            return
+        }
+        overlayHandler.post {
+            if (!scrollTvAccessibility(forward)) {
+                enqueueWheelGesture(forward)
+            }
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.N)
@@ -573,40 +706,13 @@ class InputService : AccessibilityService() {
         }
 
         if (mask == WHEEL_DOWN) {
-            if (mouseY < WHEEL_STEP) {
-                return
-            }
-            val path = Path()
-            path.moveTo(mouseX.toFloat(), mouseY.toFloat())
-            path.lineTo(mouseX.toFloat(), (mouseY - WHEEL_STEP).toFloat())
-            val stroke = GestureDescription.StrokeDescription(
-                path,
-                0,
-                WHEEL_DURATION
-            )
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke)
-            wheelActionsQueue.offer(builder.build())
-            consumeWheelActions()
-
+            performWheelScroll(forward = true)
+            return
         }
 
         if (mask == WHEEL_UP) {
-            if (mouseY < WHEEL_STEP) {
-                return
-            }
-            val path = Path()
-            path.moveTo(mouseX.toFloat(), mouseY.toFloat())
-            path.lineTo(mouseX.toFloat(), (mouseY + WHEEL_STEP).toFloat())
-            val stroke = GestureDescription.StrokeDescription(
-                path,
-                0,
-                WHEEL_DURATION
-            )
-            val builder = GestureDescription.Builder()
-            builder.addStroke(stroke)
-            wheelActionsQueue.offer(builder.build())
-            consumeWheelActions()
+            performWheelScroll(forward = false)
+            return
         }
     }
 
@@ -784,6 +890,7 @@ class InputService : AccessibilityService() {
     @RequiresApi(Build.VERSION_CODES.N)
     fun onKeyEvent(data: ByteArray) {
         val keyEvent = KeyEvent.parseFrom(data)
+        updateRemoteControlState(keyEvent)
         val keyboardMode = keyEvent.getMode()
 
         var textToCommit: String? = null
@@ -810,7 +917,7 @@ class InputService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < 33 || textToCommit == null) {
             ke = KeyEventConverter.toAndroidKeyEvent(keyEvent)
         }
-        if (isRemotePasteShortcut(keyEvent, ke)) {
+        if (isRemotePasteShortcut(keyEvent, ke, textToCommit)) {
             if (keyEvent.getDown() || keyEvent.getPress()) {
                 Handler(Looper.getMainLooper()).post { pasteRemoteClipboardText() }
             }
@@ -1151,6 +1258,7 @@ class InputService : AccessibilityService() {
     override fun onDestroy() {
         hideProjectionRequestOverlay()
         hideRemoteCursor()
+        remoteControlDown = false
         ctx = null
         // Keep this fallback even though onUnbind usually notifies first.
         notifyInputState()
@@ -1160,6 +1268,7 @@ class InputService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         hideProjectionRequestOverlay()
         hideRemoteCursor()
+        remoteControlDown = false
         ctx = null
         notifyInputState()
         return super.onUnbind(intent)
