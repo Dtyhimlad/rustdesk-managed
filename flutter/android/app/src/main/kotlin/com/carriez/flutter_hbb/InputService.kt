@@ -118,6 +118,11 @@ class InputService : AccessibilityService() {
     private var projectionRequestView: Button? = null
     private var projectionRequestTimeout: Runnable? = null
 
+    private data class NodeSnapshot(
+        val node: AccessibilityNodeInfo,
+        val bounds: Rect
+    )
+
     private var lastX = 0
     private var lastY = 0
 
@@ -251,28 +256,175 @@ class InputService : AccessibilityService() {
         projectionRequestView = null
     }
 
+    private fun collectVisibleNodes(
+        node: AccessibilityNodeInfo?,
+        nodes: MutableList<NodeSnapshot>,
+        limit: Int = 512
+    ) {
+        if (node == null || nodes.size >= limit) return
+        if (node.isVisibleToUser) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty) {
+                nodes.add(NodeSnapshot(node, bounds))
+            }
+        }
+        for (index in 0 until node.childCount) {
+            collectVisibleNodes(node.getChild(index), nodes, limit)
+            if (nodes.size >= limit) return
+        }
+    }
+
+    private fun nodeCanClick(node: AccessibilityNodeInfo): Boolean {
+        return node.isClickable || node.actionList.any {
+            it.id == AccessibilityNodeInfo.ACTION_CLICK
+        }
+    }
+
+    private fun clickTvNodeAt(x: Int, y: Int): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val nodes = mutableListOf<NodeSnapshot>()
+        collectVisibleNodes(root, nodes)
+        val target = nodes
+            .asSequence()
+            .filter { it.bounds.contains(x, y) && nodeCanClick(it.node) }
+            .minByOrNull { it.bounds.width().toLong() * it.bounds.height().toLong() }
+            ?.node
+            ?: return false
+        val clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        Log.d(logTag, "TV node click at $x,$y success:$clicked")
+        return clicked
+    }
+
+    @RequiresApi(Build.VERSION_CODES.N)
+    private fun performTvCompatibleClick(x: Int, y: Int, duration: Long) {
+        if (!isTvDevice() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            performClick(x, y, duration)
+            return
+        }
+        overlayHandler.post {
+            // Android's documented compatibility order is ACTION_CLICK first,
+            // followed by a coordinate gesture when an app exposes no usable node.
+            if (!clickTvNodeAt(x, y)) {
+                performClick(x, y, duration)
+            }
+        }
+    }
+
+    private fun directionalScore(current: Rect, candidate: Rect, direction: Int): Long? {
+        val currentX = current.centerX()
+        val currentY = current.centerY()
+        val candidateX = candidate.centerX()
+        val candidateY = candidate.centerY()
+        val deltaX = candidateX - currentX
+        val deltaY = candidateY - currentY
+        val major: Int
+        val minor: Int
+        val overlapsBeam: Boolean
+        when (direction) {
+            View.FOCUS_UP -> {
+                if (deltaY >= 0) return null
+                major = -deltaY
+                minor = abs(deltaX)
+                overlapsBeam = candidate.right >= current.left && candidate.left <= current.right
+            }
+            View.FOCUS_DOWN -> {
+                if (deltaY <= 0) return null
+                major = deltaY
+                minor = abs(deltaX)
+                overlapsBeam = candidate.right >= current.left && candidate.left <= current.right
+            }
+            View.FOCUS_LEFT -> {
+                if (deltaX >= 0) return null
+                major = -deltaX
+                minor = abs(deltaY)
+                overlapsBeam = candidate.bottom >= current.top && candidate.top <= current.bottom
+            }
+            View.FOCUS_RIGHT -> {
+                if (deltaX <= 0) return null
+                major = deltaX
+                minor = abs(deltaY)
+                overlapsBeam = candidate.bottom >= current.top && candidate.top <= current.bottom
+            }
+            else -> return null
+        }
+        val beamPenalty = if (overlapsBeam) 0L else 1_000_000_000L
+        return beamPenalty + major.toLong() * 10_000L + minor
+    }
+
     private fun moveTvAccessibilityFocus(direction: Int): Boolean {
         val root = rootInActiveWindow ?: return false
+        val nodes = mutableListOf<NodeSnapshot>()
+        collectVisibleNodes(root, nodes)
         val current = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: nodes.firstOrNull { it.node.isAccessibilityFocused || it.node.isFocused }?.node
             ?: root
-        val next = current.focusSearch(direction) ?: return false
+        val currentBounds = Rect().also { current.getBoundsInScreen(it) }
+        val next = nodes
+            .asSequence()
+            .filter {
+                it.node != current &&
+                    (it.node.isFocusable || it.node.isClickable) &&
+                    directionalScore(currentBounds, it.bounds, direction) != null
+            }
+            .minByOrNull { directionalScore(currentBounds, it.bounds, direction) ?: Long.MAX_VALUE }
+            ?.node
+            ?: current.focusSearch(direction)
+            ?: return false
         val accessibilityFocused =
             next.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
         val inputFocused = next.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        Log.d(logTag, "TV spatial focus direction:$direction success:${accessibilityFocused || inputFocused}")
         return accessibilityFocused || inputFocused
     }
 
     private fun clickTvAccessibilityFocus(): Boolean {
-        val node = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        var node = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: rootInActiveWindow
             ?: return false
+        while (!nodeCanClick(node)) {
+            node = node.parent ?: return false
+        }
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     private fun tryHandleTvNavigationKey(event: KeyEventAndroid): Boolean {
-        if (!isTvDevice() || event.action != KeyEventAndroid.ACTION_DOWN) return false
+        if (!isTvDevice()) return false
+        val supportedKey = when (event.keyCode) {
+            KeyEventAndroid.KEYCODE_DPAD_UP,
+            KeyEventAndroid.KEYCODE_DPAD_DOWN,
+            KeyEventAndroid.KEYCODE_DPAD_LEFT,
+            KeyEventAndroid.KEYCODE_DPAD_RIGHT,
+            KeyEventAndroid.KEYCODE_TAB,
+            KeyEventAndroid.KEYCODE_DPAD_CENTER,
+            KeyEventAndroid.KEYCODE_ENTER,
+            KeyEventAndroid.KEYCODE_NUMPAD_ENTER,
+            KeyEventAndroid.KEYCODE_SPACE,
+            KeyEventAndroid.KEYCODE_BACK,
+            KeyEventAndroid.KEYCODE_ESCAPE -> true
+            else -> false
+        }
+        if (!supportedKey) return false
+        if (event.action != KeyEventAndroid.ACTION_DOWN) return true
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            return when (event.keyCode) {
+                KeyEventAndroid.KEYCODE_DPAD_UP -> performGlobalAction(GLOBAL_ACTION_DPAD_UP)
+                KeyEventAndroid.KEYCODE_DPAD_DOWN -> performGlobalAction(GLOBAL_ACTION_DPAD_DOWN)
+                KeyEventAndroid.KEYCODE_DPAD_LEFT -> performGlobalAction(GLOBAL_ACTION_DPAD_LEFT)
+                KeyEventAndroid.KEYCODE_DPAD_RIGHT -> performGlobalAction(GLOBAL_ACTION_DPAD_RIGHT)
+                KeyEventAndroid.KEYCODE_DPAD_CENTER,
+                KeyEventAndroid.KEYCODE_ENTER,
+                KeyEventAndroid.KEYCODE_NUMPAD_ENTER,
+                KeyEventAndroid.KEYCODE_SPACE -> performGlobalAction(GLOBAL_ACTION_DPAD_CENTER)
+                KeyEventAndroid.KEYCODE_BACK,
+                KeyEventAndroid.KEYCODE_ESCAPE -> performGlobalAction(GLOBAL_ACTION_BACK)
+                else -> false
+            }
+        }
+
         return when (event.keyCode) {
             KeyEventAndroid.KEYCODE_DPAD_UP -> moveTvAccessibilityFocus(View.FOCUS_UP)
             KeyEventAndroid.KEYCODE_DPAD_DOWN -> moveTvAccessibilityFocus(View.FOCUS_DOWN)
@@ -287,6 +439,36 @@ class InputService : AccessibilityService() {
             KeyEventAndroid.KEYCODE_ESCAPE -> performGlobalAction(GLOBAL_ACTION_BACK)
             else -> false
         }
+    }
+
+    private fun isRemotePasteShortcut(
+        keyEvent: KeyEvent,
+        event: KeyEventAndroid?
+    ): Boolean {
+        val controlPressed = event?.isCtrlPressed == true ||
+            keyEvent.getModifiersList().any {
+                it == hbb.MessageOuterClass.ControlKey.Control ||
+                    it == hbb.MessageOuterClass.ControlKey.RControl
+            }
+        if (!controlPressed) return false
+        val chr = if (keyEvent.hasChr()) keyEvent.getChr() else -1
+        return event?.keyCode == KeyEventAndroid.KEYCODE_V ||
+            chr == 'v'.code || chr == 'V'.code || chr == KeyEventAndroid.KEYCODE_V
+    }
+
+    private fun pasteRemoteClipboardText(): Boolean {
+        val text = MainApplication.rdClipboardManager?.remoteTextForPaste()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return false
+        val event = KeyEventAndroid(KeyEventAndroid.ACTION_DOWN, KeyEventAndroid.KEYCODE_UNKNOWN)
+        for (node in possibleAccessibiltyNodes()) {
+            if (trySendKeyEvent(event, node, text)) {
+                Log.d(logTag, "Remote clipboard inserted into focused field")
+                return true
+            }
+        }
+        Log.w(logTag, "Remote clipboard received but no editable field is focused")
+        return false
     }
 
     @RequiresApi(Build.VERSION_CODES.N)
@@ -347,7 +529,11 @@ class InputService : AccessibilityService() {
                 if (simpleClick) {
                     stroke = null
                     touchPath.reset()
-                    performClick(mouseDownX, mouseDownY, ViewConfiguration.getTapTimeout().toLong())
+                    performTvCompatibleClick(
+                        mouseDownX,
+                        mouseDownY,
+                        ViewConfiguration.getTapTimeout().toLong()
+                    )
                 } else {
                     endGesture(mouseX, mouseY)
                 }
@@ -623,6 +809,12 @@ class InputService : AccessibilityService() {
         var ke: KeyEventAndroid? = null
         if (Build.VERSION.SDK_INT < 33 || textToCommit == null) {
             ke = KeyEventConverter.toAndroidKeyEvent(keyEvent)
+        }
+        if (isRemotePasteShortcut(keyEvent, ke)) {
+            if (keyEvent.getDown() || keyEvent.getPress()) {
+                Handler(Looper.getMainLooper()).post { pasteRemoteClipboardText() }
+            }
+            return
         }
         ke?.let { event ->
             if (tryHandleVolumeKeyEvent(event)) {

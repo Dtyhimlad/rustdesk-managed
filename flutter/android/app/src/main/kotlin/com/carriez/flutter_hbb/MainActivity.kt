@@ -13,7 +13,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.Build
 import android.os.IBinder
@@ -42,9 +41,6 @@ class MainActivity : FlutterActivity() {
             private set
 
         var flutterMethodChannel: MethodChannel? = null
-        private var _rdClipboardManager: RdClipboardManager? = null
-        val rdClipboardManager: RdClipboardManager?
-            get() = _rdClipboardManager;
     }
 
     private val channelTag = "mChannel"
@@ -101,10 +97,6 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (_rdClipboardManager == null) {
-            _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            FFI.setClipboardManager(_rdClipboardManager!!)
-        }
         ensureListenerService()
     }
 
@@ -248,7 +240,7 @@ class MainActivity : FlutterActivity() {
 
                 }
                 "try_sync_clipboard" -> {
-                    rdClipboardManager?.syncClipboard(true)
+                    MainApplication.rdClipboardManager?.syncClipboard(true)
                     result.success(true)
                 }
                 GET_START_ON_BOOT_OPT -> {

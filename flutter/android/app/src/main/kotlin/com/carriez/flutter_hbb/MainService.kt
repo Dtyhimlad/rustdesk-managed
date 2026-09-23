@@ -317,10 +317,14 @@ class MainService : Service() {
 
     private var isHalfScale: Boolean? = null;
 
-    private fun isTvOrConstrainedProcess(): Boolean {
+    private fun isTvDevice(): Boolean {
         val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
-        val isTv = uiMode == Configuration.UI_MODE_TYPE_TELEVISION ||
+        return uiMode == Configuration.UI_MODE_TYPE_TELEVISION ||
             packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+    }
+
+    private fun isTvOrConstrainedProcess(): Boolean {
+        val isTv = isTvDevice()
         val is32Bit = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !android.os.Process.is64Bit()
         return isTv || is32Bit
@@ -358,10 +362,20 @@ class MainService : Service() {
         Log.d(logTag,"updateScreenInfo:w:$w,h:$h")
         var scale = 1
         if (w != 0 && h != 0) {
-            if (isTvOrConstrainedProcess() && maxDimension > 1920) {
+            val tvCaptureLimit = if (
+                isTvDevice() &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                maxDimension > 2560
+            ) {
+                1280
+            } else {
+                1920
+            }
+            if (isTvOrConstrainedProcess() && maxDimension > tvCaptureLimit) {
                 // Many TV boxes report a 4K display while giving 32-bit apps a
-                // small heap. Four full-size RGBA buffers can exceed 125 MiB.
-                scale = (maxDimension + 1919) / 1920
+                // small heap. SDK 30 TV firmware is particularly sensitive to
+                // full-resolution RGBA capture, so use 720p-class capture there.
+                scale = (maxDimension + tvCaptureLimit - 1) / tvCaptureLimit
                 w /= scale
                 h /= scale
                 dpi = max(1, dpi / scale)
@@ -722,7 +736,7 @@ class MainService : Service() {
 
         _isStart = true
         FFI.setFrameRawEnable("video",true)
-        MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
+        MainApplication.rdClipboardManager?.setCaptureStarted(_isStart)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isTvOrConstrainedProcess()) {
             if (!audioRecordHandle.createAudioRecorder(false, mediaProjection)) {
@@ -749,7 +763,7 @@ class MainService : Service() {
         InputService.ctx?.hideRemoteCursor()
         FFI.setFrameRawEnable("video",false)
         _isStart = false
-        MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
+        MainApplication.rdClipboardManager?.setCaptureStarted(_isStart)
 
         // For temporary capture restarts (for example, orientation changes) we
         // retain the projection and, on Android 14+, its VirtualDisplay.
