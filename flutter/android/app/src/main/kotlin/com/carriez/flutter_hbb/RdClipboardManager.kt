@@ -35,6 +35,8 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     // It's okay to that `rustEnableClientClipboard(false)` is called after `rustUpdateClipboard`,
     // though the `lastUpdatedClipData` will be set to null once.
     private var lastUpdatedClipData: ClipData? = null
+    @Volatile
+    private var lastRemoteText: String? = null
     private var isClientEnabled = true;
     private var _isCaptureStarted = false;
 
@@ -148,6 +150,8 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         checkPrimaryClip(isClient)
     }
 
+    fun remoteTextForPaste(): String? = lastRemoteText
+
     @Keep
     fun rustUpdateClipboard(clips: ByteArray) {
         val clips = MultiClipboards.parseFrom(clips)
@@ -180,6 +184,7 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
             Log.e(logTag, "No text content in clipboard")
             return
         } else {
+            lastRemoteText = text
             if (html == null) {
                 item = ClipData.Item(text)
             } else {

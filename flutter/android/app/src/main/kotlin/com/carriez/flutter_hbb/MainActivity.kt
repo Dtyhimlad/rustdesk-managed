@@ -14,7 +14,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.Build
 import android.os.IBinder
@@ -45,15 +44,17 @@ import java.io.FileOutputStream
 
 class MainActivity : FlutterActivity() {
     companion object {
+        @Volatile
+        var isInForeground = false
+            private set
+
         var flutterMethodChannel: MethodChannel? = null
-        private var _rdClipboardManager: RdClipboardManager? = null
-        val rdClipboardManager: RdClipboardManager?
-            get() = _rdClipboardManager;
     }
 
     private val channelTag = "mChannel"
     private val logTag = "mMainActivity"
     private var mainService: MainService? = null
+    private var isServiceBound = false
     private sealed class PendingPicker {
         data class ImportFiles(val result: MethodChannel.Result) : PendingPicker()
         data class ExportFile(val source: File, val result: MethodChannel.Result) : PendingPicker()
@@ -78,9 +79,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         if (MainService.isReady) {
-            Intent(activity, MainService::class.java).also {
-                bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-            }
+            bindListenerService()
         }
         flutterMethodChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -225,10 +224,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (_rdClipboardManager == null) {
-            _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            FFI.setClipboardManager(_rdClipboardManager!!)
-        }
+        ensureListenerService()
     }
 
     override fun onDestroy() {
@@ -243,10 +239,30 @@ class MainActivity : FlutterActivity() {
         if (isFinishing) {
             FFI.closeAllSessions()
         }
-        mainService?.let {
+        if (isServiceBound) {
             unbindService(serviceConnection)
+            isServiceBound = false
         }
+        mainService = null
         super.onDestroy()
+    }
+
+    private fun bindListenerService() {
+        if (isServiceBound) return
+        val intent = Intent(this, MainService::class.java)
+        isServiceBound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun ensureListenerService() {
+        val intent = Intent(this, MainService::class.java).apply {
+            action = ACT_START_LISTENER_SERVICE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        bindListenerService()
     }
 
     private val serviceConnection = object : ServiceConnection {
@@ -259,6 +275,7 @@ class MainActivity : FlutterActivity() {
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.d(logTag, "onServiceDisconnected")
             mainService = null
+            isServiceBound = false
         }
     }
 
@@ -267,14 +284,10 @@ class MainActivity : FlutterActivity() {
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
                 "init_service" -> {
-                    Intent(activity, MainService::class.java).also {
-                        bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
-                    }
-                    if (MainService.isReady) {
-                        result.success(false)
-                        return@setMethodCallHandler
-                    }
-                    requestMediaProjection()
+                    // Managed mode keeps the connection listener alive independently
+                    // from MediaProjection. Screen consent is requested only when a
+                    // remote session actually needs capture.
+                    ensureListenerService()
                     result.success(true)
                 }
                 "start_capture" -> {
@@ -365,7 +378,7 @@ class MainActivity : FlutterActivity() {
 
                 }
                 "try_sync_clipboard" -> {
-                    rdClipboardManager?.syncClipboard(true)
+                    MainApplication.rdClipboardManager?.syncClipboard(true)
                     result.success(true)
                 }
                 GET_START_ON_BOOT_OPT -> {
@@ -996,6 +1009,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onStop() {
+        isInForeground = false
         super.onStop()
         val disableFloatingWindow = FFI.getLocalOption("disable-floating-window") == "Y"
         if (!disableFloatingWindow && MainService.isReady) {
@@ -1005,6 +1019,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onStart() {
         super.onStart()
+        isInForeground = true
         stopService(Intent(this, FloatingWindowService::class.java))
     }
 }
