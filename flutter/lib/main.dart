@@ -258,6 +258,29 @@ Future<void> configureManagedAndroidBehavior() async {
       key: kOptionDisableFloatingWindow, value: 'Y');
 }
 
+Future<void> initializeManagedAndroidAfterUi() async {
+  // Enrollment has its own RustDesk-ID polling and HTTP retry loop. Start it
+  // immediately so a slow vendor service implementation cannot prevent the
+  // device from ever appearing in the management panel.
+  unawaited(registerManagedAndroid());
+
+  try {
+    await configureManagedAndroidBehavior()
+        .timeout(const Duration(seconds: 15));
+  } catch (error) {
+    debugPrint('Managed Android configuration did not complete: $error');
+  }
+
+  try {
+    await gFFI.serverModel.startService().timeout(const Duration(seconds: 20));
+  } catch (error) {
+    // BootReceiver and the Android foreground-service lifecycle provide a
+    // second path to start the listener. Never leave the Flutter UI on its
+    // launch screen just because a vendor ROM blocks this call.
+    debugPrint('Managed Android service start did not complete: $error');
+  }
+}
+
 void runMainApp(bool startService) async {
   // register uni links
   await initEnv(kAppTypeMain);
@@ -307,15 +330,13 @@ void runMobileApp() async {
   if (isAndroid) androidChannelInit();
   if (isAndroid) {
     platformFFI.syncAndroidServiceAppDirConfigPath();
-    await configureManagedAndroidBehavior();
-    await gFFI.serverModel.startService();
   }
   draggablePositions.load();
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
   if (isAndroid) {
-    unawaited(registerManagedAndroid());
+    unawaited(initializeManagedAndroidAfterUi());
   }
   await initUniLinks();
 }

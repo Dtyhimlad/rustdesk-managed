@@ -100,7 +100,8 @@ class InputService : AccessibilityService() {
     private var mouseDragged = false
     private var remoteControlDown = false
     private var timer = Timer()
-    private var recentActionTask: TimerTask? = null
+    private var wheelButtonIsDown = false
+    private var recentActionWasSent = false
     // 100(tap timeout) + 400(long press timeout)
     private val longPressDuration = ViewConfiguration.getTapTimeout().toLong() + ViewConfiguration.getLongPressTimeout().toLong()
 
@@ -114,6 +115,12 @@ class InputService : AccessibilityService() {
         getSystemService(WINDOW_SERVICE) as WindowManager
     }
     private val overlayHandler = Handler(Looper.getMainLooper())
+    private val recentActionRunnable = Runnable {
+        if (wheelButtonIsDown) {
+            recentActionWasSent = true
+            performTvSystemAction(GLOBAL_ACTION_RECENTS, "recent apps")
+        }
+    }
     private var remoteCursorView: View? = null
     private var remoteCursorParams: WindowManager.LayoutParams? = null
     private var projectionRequestView: Button? = null
@@ -128,6 +135,42 @@ class InputService : AccessibilityService() {
     private var lastY = 0
 
     private val volumeController: VolumeController by lazy { VolumeController(applicationContext.getSystemService(AUDIO_SERVICE) as AudioManager) }
+
+    /**
+     * Several Android TV vendor ROMs reject accessibility global actions when
+     * they arrive on RustDesk's input worker thread. Dispatch every toolbar
+     * system action through the accessibility service's main looper.
+     */
+    private fun performTvSystemAction(action: Int, label: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            overlayHandler.post { performTvSystemAction(action, label) }
+            return
+        }
+
+        if (!performGlobalAction(action)) {
+            Log.w(logTag, "Android TV system action was rejected: $label")
+        }
+    }
+
+    private fun handleWheelButtonDown() {
+        overlayHandler.post {
+            wheelButtonIsDown = true
+            recentActionWasSent = false
+            overlayHandler.removeCallbacks(recentActionRunnable)
+            overlayHandler.postDelayed(recentActionRunnable, LONG_TAP_DELAY)
+        }
+    }
+
+    private fun handleWheelButtonUp() {
+        overlayHandler.post {
+            wheelButtonIsDown = false
+            overlayHandler.removeCallbacks(recentActionRunnable)
+            if (!recentActionWasSent) {
+                performTvSystemAction(GLOBAL_ACTION_HOME, "home")
+            }
+            recentActionWasSent = false
+        }
+    }
 
     private fun isTvDevice(): Boolean {
         val uiMode = resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK
@@ -707,28 +750,19 @@ class InputService : AccessibilityService() {
         }
 
         if (mask == BACK_UP) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
+            performTvSystemAction(GLOBAL_ACTION_BACK, "back")
             return
         }
 
         // long WHEEL_BUTTON_DOWN -> GLOBAL_ACTION_RECENTS
         if (mask == WHEEL_BUTTON_DOWN) {
-            timer.purge()
-            recentActionTask = object : TimerTask() {
-                override fun run() {
-                    performGlobalAction(GLOBAL_ACTION_RECENTS)
-                    recentActionTask = null
-                }
-            }
-            timer.schedule(recentActionTask, LONG_TAP_DELAY)
+            handleWheelButtonDown()
+            return
         }
 
         // wheel button up
         if (mask == WHEEL_BUTTON_UP) {
-            if (recentActionTask != null) {
-                recentActionTask!!.cancel()
-                performGlobalAction(GLOBAL_ACTION_HOME)
-            }
+            handleWheelButtonUp()
             return
         }
 
