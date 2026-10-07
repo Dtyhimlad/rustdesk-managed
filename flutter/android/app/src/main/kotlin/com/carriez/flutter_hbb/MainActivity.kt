@@ -34,6 +34,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import com.hjq.permissions.XXPermissions
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
@@ -75,6 +76,12 @@ class MainActivity : FlutterActivity() {
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
+
+    // A number of inexpensive Android TV boxes have broken SurfaceView
+    // composition even though they report valid OpenGL/Vulkan support. A
+    // TextureView is slightly less efficient but much more compatible, and
+    // this client spends almost all of its time serving rather than drawing.
+    override fun getRenderMode(): RenderMode = RenderMode.texture
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -283,6 +290,12 @@ class MainActivity : FlutterActivity() {
         flutterMethodChannel.setMethodCallHandler { call, result ->
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
+                "get_app_dir" -> {
+                    result.success(filesDir.absolutePath)
+                }
+                "get_storage_dir" -> {
+                    result.success(getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
+                }
                 "init_service" -> {
                     // Managed mode keeps the connection listener alive independently
                     // from MediaProjection. Screen consent is requested only when a

@@ -2147,4 +2147,14 @@ class InputModel {
       await tapHidKey(PhysicalKeyboardKey.audioVolumeDown.usbHidUsage & 0xFFFF);
   Future<void> onMobilePower() async =>
       await tapHidKey(PhysicalKeyboardKey.power.usbHidUsage & 0xFFFF);
+  Future<void> onMobileDpadUp() async =>
+      await tapHidKey(PhysicalKeyboardKey.arrowUp.usbHidUsage & 0xFFFF);
+  Future<void> onMobileDpadDown() async =>
+      await tapHidKey(PhysicalKeyboardKey.arrowDown.usbHidUsage & 0xFFFF);
+  Future<void> onMobileDpadLeft() async =>
+      await tapHidKey(PhysicalKeyboardKey.arrowLeft.usbHidUsage & 0xFFFF);
+  Future<void> onMobileDpadRight() async =>
+      await tapHidKey(PhysicalKeyboardKey.arrowRight.usbHidUsage & 0xFFFF);
+  Future<void> onMobileDpadCenter() async =>
+      await tapHidKey(PhysicalKeyboardKey.enter.usbHidUsage & 0xFFFF);
 }

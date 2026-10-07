@@ -170,7 +170,9 @@ Future<void> registerManagedAndroid() async {
   var modelName = '';
   var operatingSystem = 'Android';
   try {
-    final info = await DeviceInfoPlugin().androidInfo;
+    final info = await DeviceInfoPlugin()
+        .androidInfo
+        .timeout(const Duration(seconds: 8));
     final manufacturer = info.manufacturer.trim();
     final model = info.model.trim();
     modelName = model;
@@ -325,6 +327,13 @@ void runMainApp(bool startService) async {
 }
 
 void runMobileApp() async {
+  if (isAndroid) {
+    // Draw a first frame before touching vendor storage/device plugins or the
+    // Rust core. This avoids leaving slow TV boxes on Android's blank launch
+    // window and makes initialization progress visible.
+    runApp(const _ManagedAndroidStartupApp());
+    await WidgetsBinding.instance.endOfFrame;
+  }
   await initEnv(kAppTypeMain);
   checkUpdate();
   if (isAndroid) androidChannelInit();
@@ -332,13 +341,61 @@ void runMobileApp() async {
     platformFFI.syncAndroidServiceAppDirConfigPath();
   }
   draggablePositions.load();
-  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
+  try {
+    await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()])
+        .timeout(const Duration(seconds: 10));
+  } catch (error) {
+    debugPrint('Android cache loading did not complete: $error');
+  }
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
   if (isAndroid) {
     unawaited(initializeManagedAndroidAfterUi());
   }
   await initUniLinks();
+}
+
+class _ManagedAndroidStartupApp extends StatelessWidget {
+  const _ManagedAndroidStartupApp();
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: Color(0xFF0D1117),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 34,
+                height: 34,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: Color(0xFFC77A00),
+                ),
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Inforchannel Assist',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'A iniciar o acesso remoto…',
+                style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 void runMultiWindow(

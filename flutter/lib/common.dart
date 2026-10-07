@@ -981,10 +981,10 @@ class OverlayDialogManager {
 
 makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
   makeMobileActions(BuildContext context, double s) {
-    final scale = s < 0.85 ? 0.85 : s;
+    final scale = s.clamp(0.85, 1.0).toDouble();
     final session = ffi ?? gFFI;
-    const double overlayW = 200;
-    const double overlayH = 45;
+    const double overlayW = 395;
+    const double overlayH = 34;
     computeOverlayPosition() {
       final screenW = MediaQuery.of(context).size.width;
       final screenH = MediaQuery.of(context).size.height;
@@ -1006,6 +1006,13 @@ makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
       onBackPressed: session.inputModel.onMobileBack,
       onHomePressed: session.inputModel.onMobileHome,
       onRecentPressed: session.inputModel.onMobileApps,
+      onDpadUpPressed: session.inputModel.onMobileDpadUp,
+      onDpadDownPressed: session.inputModel.onMobileDpadDown,
+      onDpadLeftPressed: session.inputModel.onMobileDpadLeft,
+      onDpadRightPressed: session.inputModel.onMobileDpadRight,
+      onDpadCenterPressed: session.inputModel.onMobileDpadCenter,
+      onVolumeUpPressed: session.inputModel.onMobileVolumeUp,
+      onVolumeDownPressed: session.inputModel.onMobileVolumeDown,
       onHidePressed: onHide,
     );
   }
@@ -1013,7 +1020,7 @@ makeMobileActionsOverlayEntry(VoidCallback? onHide, {FFI? ffi}) {
   return OverlayEntry(builder: (context) {
     if (isDesktop) {
       final c = Provider.of<CanvasModel>(context);
-      return makeMobileActions(context, c.scale * 2.0);
+      return makeMobileActions(context, c.scale);
     } else {
       return makeMobileActions(globalKey.currentContext!, 1.0);
     }

@@ -31,11 +31,19 @@
 
     <application
         android:name=".MainApplication"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:label="RustDesk Managed"
         android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true">
+
+        <!-- Cheap Android TV GPUs frequently advertise an incomplete Vulkan
+             implementation. Keep the managed client on Flutter's mature Skia
+             path so the first frame is rendered reliably. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
 
         <receiver
             android:name=".BootReceiver"

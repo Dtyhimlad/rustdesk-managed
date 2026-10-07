@@ -175,6 +175,13 @@ class DraggableMobileActions extends StatelessWidget {
       {this.onBackPressed,
       this.onRecentPressed,
       this.onHomePressed,
+      this.onDpadUpPressed,
+      this.onDpadDownPressed,
+      this.onDpadLeftPressed,
+      this.onDpadRightPressed,
+      this.onDpadCenterPressed,
+      this.onVolumeUpPressed,
+      this.onVolumeDownPressed,
       this.onHidePressed,
       required this.position,
       required this.width,
@@ -188,10 +195,50 @@ class DraggableMobileActions extends StatelessWidget {
   final VoidCallback? onBackPressed;
   final VoidCallback? onHomePressed;
   final VoidCallback? onRecentPressed;
+  final VoidCallback? onDpadUpPressed;
+  final VoidCallback? onDpadDownPressed;
+  final VoidCallback? onDpadLeftPressed;
+  final VoidCallback? onDpadRightPressed;
+  final VoidCallback? onDpadCenterPressed;
+  final VoidCallback? onVolumeUpPressed;
+  final VoidCallback? onVolumeDownPressed;
   final VoidCallback? onHidePressed;
 
   @override
   Widget build(BuildContext context) {
+    Widget actionButton(
+      IconData icon,
+      String label,
+      VoidCallback? onPressed,
+    ) {
+      final size = 30 * scale;
+      return Tooltip(
+        message: translate(label),
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: IconButton(
+            color: Colors.white,
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints.tight(Size.square(size)),
+            onPressed: onPressed,
+            splashRadius: 16 * scale,
+            icon: Icon(icon),
+            iconSize: 18 * scale,
+          ),
+        ),
+      );
+    }
+
+    Widget divider() => SizedBox(
+          height: 22 * scale,
+          child: const VerticalDivider(
+            width: 5,
+            thickness: 1,
+            color: Colors.white54,
+          ),
+        );
+
     return Draggable(
         position: position,
         width: scale * width,
@@ -200,46 +247,40 @@ class DraggableMobileActions extends StatelessWidget {
           return GestureDetector(
               onPanUpdate: onPanUpdate,
               child: Card(
+                  margin: EdgeInsets.zero,
                   color: Colors.transparent,
                   shadowColor: Colors.transparent,
                   child: Container(
                     decoration: BoxDecoration(
                         color: MyTheme.accent.withOpacity(0.4),
                         borderRadius:
-                            BorderRadius.all(Radius.circular(15 * scale))),
+                            BorderRadius.all(Radius.circular(10 * scale))),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        IconButton(
-                            color: Colors.white,
-                            onPressed: onBackPressed,
-                            splashRadius: kDesktopIconButtonSplashRadius,
-                            icon: const Icon(Icons.arrow_back),
-                            iconSize: 24 * scale),
-                        IconButton(
-                            color: Colors.white,
-                            onPressed: onHomePressed,
-                            splashRadius: kDesktopIconButtonSplashRadius,
-                            icon: const Icon(Icons.home),
-                            iconSize: 24 * scale),
-                        IconButton(
-                            color: Colors.white,
-                            onPressed: onRecentPressed,
-                            splashRadius: kDesktopIconButtonSplashRadius,
-                            icon: const Icon(Icons.more_horiz),
-                            iconSize: 24 * scale),
-                        const VerticalDivider(
-                          width: 0,
-                          thickness: 2,
-                          indent: 10,
-                          endIndent: 10,
-                        ),
-                        IconButton(
-                            color: Colors.white,
-                            onPressed: onHidePressed,
-                            splashRadius: kDesktopIconButtonSplashRadius,
-                            icon: const Icon(Icons.keyboard_arrow_down),
-                            iconSize: 24 * scale),
+                        actionButton(Icons.arrow_back, 'Back', onBackPressed),
+                        actionButton(Icons.home, 'Home', onHomePressed),
+                        actionButton(
+                            Icons.more_horiz, 'Apps', onRecentPressed),
+                        divider(),
+                        actionButton(Icons.keyboard_arrow_left, 'Left',
+                            onDpadLeftPressed),
+                        actionButton(Icons.keyboard_arrow_up, 'Up',
+                            onDpadUpPressed),
+                        actionButton(Icons.check_circle_outline, 'OK',
+                            onDpadCenterPressed),
+                        actionButton(Icons.keyboard_arrow_down, 'Down',
+                            onDpadDownPressed),
+                        actionButton(Icons.keyboard_arrow_right, 'Right',
+                            onDpadRightPressed),
+                        divider(),
+                        actionButton(Icons.volume_down, 'Volume down',
+                            onVolumeDownPressed),
+                        actionButton(Icons.volume_up, 'Volume up',
+                            onVolumeUpPressed),
+                        divider(),
+                        actionButton(Icons.keyboard_arrow_down, 'Hide',
+                            onHidePressed),
                       ],
                     ),
                   )));

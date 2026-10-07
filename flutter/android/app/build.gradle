@@ -120,6 +120,15 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules'
         }
     }
+
+    // Some inexpensive Android TV firmware cannot mmap native libraries
+    // directly from an APK reliably. Extracting them during installation uses
+    // more disk space but avoids a successful install followed by a blank UI.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
 }
 
 flutter {

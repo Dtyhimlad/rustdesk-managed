@@ -348,8 +348,8 @@ jobs:
           flutter pub get
           flutter build apk \
             --release \
-            --build-name=1.5.0.2 \
-            --build-number=75 \
+            --build-name=1.5.0.3 \
+            --build-number=76 \
             --target-platform android-arm64 \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
@@ -364,8 +364,8 @@ jobs:
           pushd flutter
           flutter build apk \
             --release \
-            --build-name=1.5.0.2 \
-            --build-number=75 \
+            --build-name=1.5.0.3 \
+            --build-number=76 \
             --target-platform android-arm64 \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
@@ -572,8 +572,8 @@ jobs:
           flutter pub get
           flutter build apk \
             --release \
-            --build-name=1.5.0.2 \
-            --build-number=75 \
+            --build-name=1.5.0.3 \
+            --build-number=76 \
             --target-platform android-arm \
             --split-per-abi \
             --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
@@ -590,127 +590,5 @@ jobs:
         with:
           name: rustdesk-managed-android-tv-armv7
           path: inforchannel-rustdesk-tv-1.5.0-armeabi-v7a.apk
-          if-no-files-found: error
-          retention-days: 14
-
-  package-tv-universal:
-    name: Package universal Android TV APK
-    needs:
-      - build-arm64
-      - build-tv-armv7
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          submodules: recursive
-
-      - name: Install Flutter
-        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
-        with:
-          channel: stable
-          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
-          cache: true
-
-      - name: Patch Flutter 3.24.5
-        shell: bash
-        run: |
-          cd "$(dirname "$(dirname "$(which flutter)")")"
-          git restore .
-          git apply "${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
-
-      - name: Restore Flutter/Rust bridge
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: bridge-artifact
-          path: ./
-
-      - name: Download ARM64 APKs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: rustdesk-managed-android-arm64
-          path: ./prebuilt/arm64
-
-      - name: Download ARMv7 TV APK
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: rustdesk-managed-android-tv-armv7
-          path: ./prebuilt/armv7
-
-      - name: Restore both RustDesk native architectures
-        shell: bash
-        run: |
-          mkdir -p \
-            ./flutter/android/app/src/main/jniLibs/arm64-v8a \
-            ./flutter/android/app/src/main/jniLibs/armeabi-v7a
-
-          unzip -j ./prebuilt/arm64/inforchannel-rustdesk-tv-1.5.0-arm64-v8a.apk \
-            'lib/arm64-v8a/librustdesk.so' \
-            'lib/arm64-v8a/libc++_shared.so' \
-            -d ./flutter/android/app/src/main/jniLibs/arm64-v8a
-
-          unzip -j ./prebuilt/armv7/inforchannel-rustdesk-tv-1.5.0-armeabi-v7a.apk \
-            'lib/armeabi-v7a/librustdesk.so' \
-            'lib/armeabi-v7a/libc++_shared.so' \
-            -d ./flutter/android/app/src/main/jniLibs/armeabi-v7a
-
-      - name: Build universal TV APK
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          MANAGED_RUSTDESK_PASSWORD: ${{ secrets.MANAGED_RUSTDESK_PASSWORD }}
-          MANAGED_ENROLLMENT_URL: ${{ secrets.MANAGED_ENROLLMENT_URL }}
-          MANAGED_ENROLLMENT_TOKEN: ${{ secrets.MANAGED_ENROLLMENT_TOKEN }}
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        shell: bash
-        run: |
-          export PATH="/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH"
-          sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" \
-            ./flutter/android/gradle.properties
-
-          KEYSTORE_PATH="./flutter/android/app/managed-release.jks"
-          KEY_PROPERTIES="./flutter/android/key.properties"
-          cleanup_signing_files() {
-            rm -f "$KEYSTORE_PATH" "$KEY_PROPERTIES"
-          }
-          trap cleanup_signing_files EXIT
-
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          if [ ! -s "$KEYSTORE_PATH" ]; then
-            echo "::error::Decoded Android keystore is empty."
-            exit 1
-          fi
-
-          cat > "$KEY_PROPERTIES" <<EOF
-          storePassword=$ANDROID_KEYSTORE_PASSWORD
-          keyPassword=$ANDROID_KEY_PASSWORD
-          keyAlias=$ANDROID_KEY_ALIAS
-          storeFile=managed-release.jks
-          EOF
-
-          pushd flutter
-          flutter pub get
-          flutter build apk \
-            --release \
-            --build-name=1.5.0.2 \
-            --build-number=75 \
-            --target-platform android-arm,android-arm64 \
-            --dart-define=MANAGED_RUSTDESK_PASSWORD="$MANAGED_RUSTDESK_PASSWORD" \
-            --dart-define=MANAGED_ENROLLMENT_URL="$MANAGED_ENROLLMENT_URL" \
-            --dart-define=MANAGED_ENROLLMENT_TOKEN="$MANAGED_ENROLLMENT_TOKEN" \
-            --dart-define=MANAGED_DEVICE_KIND="box"
-          popd
-
-          cp ./flutter/build/app/outputs/flutter-apk/app-release.apk \
-             ./inforchannel-rustdesk-tv-1.5.0-universal.apk
-
-      - name: Upload universal TV APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: rustdesk-managed-android-tv-universal
-          path: inforchannel-rustdesk-tv-1.5.0-universal.apk
           if-no-files-found: error
           retention-days: 14

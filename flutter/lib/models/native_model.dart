@@ -45,6 +45,8 @@ DynamicLibrary _openLinuxCoreLib() {
 /// FFI wrapper around the native Rust core.
 /// Hides the platform differences.
 class PlatformFFI {
+  static const _androidPluginTimeout = Duration(seconds: 8);
+  static const _androidCoreTimeout = Duration(seconds: 15);
   String _dir = '';
   // _homeDir is only needed for Android and IOS.
   String _homeDir = '';
@@ -150,13 +152,27 @@ class PlatformFFI {
     debugPrint('initializing FFI $_appType');
     try {
       _session_get_rgba = dylib.lookupFunction<F3Dart, F3>("session_get_rgba");
+      // Construct the Rust bridge before invoking Android plugins. Some TV
+      // firmware never returns from a storage-provider call; keeping the
+      // bridge available lets the rest of startup recover after a timeout.
+      _ffiBind = RustdeskImpl(dylib);
       try {
-        // SYSTEM user failed
-        _dir = (await getApplicationDocumentsDirectory()).path;
+        if (isAndroid) {
+          // Avoid path_provider on uncertified TV ROMs. Android's own app
+          // directory is always available and is returned by MainActivity.
+          _dir = await _toAndroidChannel
+                  .invokeMethod<String>('get_app_dir')
+                  .timeout(_androidPluginTimeout) ??
+              '';
+        } else {
+          // SYSTEM user failed
+          _dir = (await getApplicationDocumentsDirectory()
+                  .timeout(_androidPluginTimeout))
+              .path;
+        }
       } catch (e) {
         debugPrint('Failed to get documents directory: $e');
       }
-      _ffiBind = RustdeskImpl(dylib);
 
       if (isLinux) {
         if (isMain) {
@@ -172,8 +188,10 @@ class PlatformFFI {
         if (isAndroid) {
           // Android file transfer uses app-specific storage. User-selected
           // files enter and leave this workspace through the system picker.
-          _homeDir = (await getExternalStorageDirectory())?.path ??
-              (await getApplicationSupportDirectory()).path;
+          _homeDir = await _toAndroidChannel
+                  .invokeMethod<String>('get_storage_dir')
+                  .timeout(_androidPluginTimeout) ??
+              _dir;
         } else if (isIOS) {
           // The previous code was `_homeDir = (await getDownloadsDirectory())?.path ?? '';`,
           // which provided the `downloads` path in the sandbox.
@@ -189,10 +207,20 @@ class PlatformFFI {
       String name = 'Flutter';
       DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
       if (isAndroid) {
-        AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
-        name = '${androidInfo.brand}-${androidInfo.model}';
-        id = androidInfo.id.hashCode.toString();
-        androidVersion = androidInfo.version.sdkInt;
+        try {
+          AndroidDeviceInfo androidInfo =
+              await deviceInfo.androidInfo.timeout(_androidPluginTimeout);
+          name = '${androidInfo.brand}-${androidInfo.model}';
+          id = androidInfo.id.hashCode.toString();
+          androidVersion = androidInfo.version.sdkInt;
+        } catch (e) {
+          // DeviceInfo is known to stall on some uncertified Android TV ROMs.
+          // RustDesk persists its own ID, so a conservative fallback is enough
+          // to let core initialization and managed enrollment continue.
+          debugPrint('Failed to read Android device information: $e');
+          name = 'Android-TV';
+          id = 'android-tv';
+        }
       } else if (isIOS) {
         IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
         name = iosInfo.utsname.machine;
@@ -228,17 +256,41 @@ class PlatformFFI {
       if (desktopType == DesktopType.cm) {
         await _ffiBind.cmInit();
       }
-      await _ffiBind.mainDeviceId(id: id);
-      await _ffiBind.mainDeviceName(name: name);
-      await _ffiBind.mainSetHomeDir(home: _homeDir);
-      await _ffiBind.mainInit(
-        appDir: _dir,
-        customClientConfig: '',
-      );
+      if (isAndroid) {
+        final steps = <String, Future<void> Function()>{
+          'device ID': () => _ffiBind.mainDeviceId(id: id),
+          'device name': () => _ffiBind.mainDeviceName(name: name),
+          'home directory': () => _ffiBind.mainSetHomeDir(home: _homeDir),
+          'RustDesk core': () => _ffiBind.mainInit(
+                appDir: _dir,
+                customClientConfig: '',
+              ),
+        };
+        for (final step in steps.entries) {
+          try {
+            await step.value().timeout(_androidCoreTimeout);
+          } catch (e) {
+            debugPrint('Android initialization timed out at ${step.key}: $e');
+          }
+        }
+      } else {
+        await _ffiBind.mainDeviceId(id: id);
+        await _ffiBind.mainDeviceName(name: name);
+        await _ffiBind.mainSetHomeDir(home: _homeDir);
+        await _ffiBind.mainInit(
+          appDir: _dir,
+          customClientConfig: '',
+        );
+      }
     } catch (e) {
       debugPrintStack(label: 'initialize failed: $e');
     }
-    version = await getVersion();
+    try {
+      version = await getVersion().timeout(_androidPluginTimeout);
+    } catch (e) {
+      debugPrint('Failed to read package version: $e');
+      version = '';
+    }
   }
 
   Future<bool> tryHandle(Map<String, dynamic> evt) async {
