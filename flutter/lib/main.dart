@@ -328,11 +328,10 @@ void runMainApp(bool startService) async {
 
 void runMobileApp() async {
   if (isAndroid) {
-    // Draw a first frame before touching vendor storage/device plugins or the
-    // Rust core. This avoids leaving slow TV boxes on Android's blank launch
-    // window and makes initialization progress visible.
+    // Schedule the startup UI immediately, but do not wait for a frame here.
+    // Some legacy Android TV renderers never report endOfFrame, which would
+    // deadlock initialization and prevent both the service and enrollment.
     runApp(const _ManagedAndroidStartupApp());
-    await WidgetsBinding.instance.endOfFrame;
   }
   await initEnv(kAppTypeMain);
   checkUpdate();

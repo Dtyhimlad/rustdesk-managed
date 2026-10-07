@@ -32,6 +32,12 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// The ARMv7 TV artifact targets older/low-cost boxes whose vendor OpenGL
+// stacks can leave Flutter on the Android launch window indefinitely. Keep
+// the normal accelerated renderer for ARM64 and enable the compatibility
+// renderer only when the CI job explicitly requests it.
+def legacyTvRendering = (System.getenv('LEGACY_TV_RENDERING') ?: 'false').toBoolean()
+
 // Add rustls-platform-verifier Android support
 String findRustlsPlatformVerifierMavenDir() {
     def dependencyText = providers.exec {
@@ -103,6 +109,11 @@ android {
         targetSdkVersion 36
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+        buildConfigField "boolean", "LEGACY_TV_RENDERING", legacyTvRendering.toString()
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     signingConfigs {

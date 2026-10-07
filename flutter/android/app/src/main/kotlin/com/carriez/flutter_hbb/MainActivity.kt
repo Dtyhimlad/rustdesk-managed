@@ -36,6 +36,7 @@ import com.hjq.permissions.XXPermissions
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterShellArgs
 import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
 import java.io.File
@@ -77,11 +78,19 @@ class MainActivity : FlutterActivity() {
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
 
-    // A number of inexpensive Android TV boxes have broken SurfaceView
-    // composition even though they report valid OpenGL/Vulkan support. A
-    // TextureView is slightly less efficient but much more compatible, and
-    // this client spends almost all of its time serving rather than drawing.
-    override fun getRenderMode(): RenderMode = RenderMode.texture
+    // ARMv7 TV builds use Flutter's software renderer because several older
+    // Mali vendor drivers never produce a first frame. Keep TextureView for
+    // the normal accelerated ARM64 builds, where it remains the more broadly
+    // compatible composition path.
+    override fun getRenderMode(): RenderMode =
+        if (BuildConfig.LEGACY_TV_RENDERING) RenderMode.surface else RenderMode.texture
+
+    override fun getFlutterShellArgs(): FlutterShellArgs =
+        super.getFlutterShellArgs().apply {
+            if (BuildConfig.LEGACY_TV_RENDERING) {
+                add(FlutterShellArgs.ARG_ENABLE_SOFTWARE_RENDERING)
+            }
+        }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
